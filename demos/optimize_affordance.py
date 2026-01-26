@@ -3,8 +3,15 @@ import numpy as np
 import open3d as o3d
 import torch
 from scipy.signal import savgol_filter
-from algos.traj_optimizer import TrajectoryOptimizer
-from diffuser_utils.dataset_utils import visualize_3d_trajectory, load_json, visualize_points, backproject, interpolate_trajectory
+from vidbot.algos.traj_optimizer import TrajectoryOptimizer
+from vidbot.diffuser_utils.dataset_utils import (
+    visualize_3d_trajectory,
+    load_json,
+    visualize_points,
+    backproject,
+    interpolate_trajectory,
+)
+
 
 def run(colmap_results, data, device, visualize=True):
     traj, vis, vis_scene = [], [], []
@@ -70,26 +77,26 @@ def run(colmap_results, data, device, visualize=True):
         optimize_pose=True,
         verbose=False,
     )
-    
+
     # Acquire the optimized results
     T_kc_final = T_kc_final.detach().cpu().numpy()
     scale_final = scale_final.detach().cpu().numpy()
     intr_np = intr.clone().cpu().numpy()
-    
+
     # Pose and scale of the first frame
     T_kc0 = T_kc_final[0]
     scale_m2c0 = scale_final[0]
-    T_kc0[:3, 3] = T_kc0[:3, 3] / scale_m2c0   
+    T_kc0[:3, 3] = T_kc0[:3, 3] / scale_m2c0
 
     for ii, fi in enumerate(frame_ids):
         # Pose and scale of the current frame
         T_kc = T_kc_final[ii]
         scale_m2c = scale_final[ii]
         T_kc[:3, 3] = T_kc[:3, 3] / scale_m2c
-        
+
         # Transformation from current frame to the first frame
-        T_c0c = np.linalg.inv(T_kc0) @ T_kc 
-    
+        T_c0c = np.linalg.inv(T_kc0) @ T_kc
+
         # Get the depth and hand bbox
         depth = depths[ii]
         hand_bbox = hand_bboxes[ii]
@@ -99,7 +106,7 @@ def run(colmap_results, data, device, visualize=True):
         points_hand = points_hand @ T_c0c[:3, :3].T + T_c0c[:3, 3]
         wp = np.median(points_hand, axis=0)
         traj.append(wp)
-        
+
         # Acquire the hand points in the scene
         if visualize:
             hand_seg_mask = hand_masks[ii]
@@ -111,7 +118,7 @@ def run(colmap_results, data, device, visualize=True):
             points_hand_scene = points_hand_scene @ T_c0c[:3, :3].T + T_c0c[:3, 3]
             pcd_scene = visualize_points(points_hand_scene, point_colors_scene)
             vis_scene.append(pcd_scene)
-            
+
             # Acquire the background points
             if ii == 0:
                 rgb_orig = rgbs[ii] / 255.0
@@ -119,27 +126,26 @@ def run(colmap_results, data, device, visualize=True):
                 points_orig, scene_ids = backproject(depth, intr_np, hand_seg_mask == 0, False)
                 point_colors_orig = rgb_orig[scene_ids[0], scene_ids[1]]
                 pcd_orig = visualize_points(points_orig, point_colors_orig)
-                
+
     # Build trajectory and visualize
     traj = np.array(traj)
     traj = savgol_filter(traj, len(traj) - 1, (len(traj) + 1) // 2, axis=0)
     fill_indices = frame_ids - frame_ids[0]
     traj_smooth, _ = interpolate_trajectory(fill_indices, traj)
     filter_window = min(5, len(traj_smooth) - 1)
-    traj_smooth = savgol_filter(
-        traj_smooth, filter_window, (filter_window + 1) // 2, axis=0
-    )
+    traj_smooth = savgol_filter(traj_smooth, filter_window, (filter_window + 1) // 2, axis=0)
     if visualize:
         _traj_vis = visualize_3d_trajectory(traj_smooth, size=0.05, cmap_name="viridis")
         traj_vis = _traj_vis[0]
         for v in _traj_vis[1:]:
             traj_vis += v
-        
+
         hand_vis = vis_scene[0]
         for v in vis_scene[1:]:
-            hand_vis += v  
+            hand_vis += v
         vis = [pcd_orig, traj_vis, hand_vis]
     return traj_smooth, vis
+
 
 if __name__ == "__main__":
     # Load the data and prepare the tensors
@@ -148,7 +154,7 @@ if __name__ == "__main__":
     data_fpath = "datasets/epickitchens_traj_demo/observation.npz"
     colmap_results = load_json(colmap_results_fpath)
     data = np.load(data_fpath)
-    
+
     # Optimize the trajectory and visualize the results
     traj_smooth, vis = run(colmap_results, data, device, visualize=True)
     o3d.visualization.draw(vis)
