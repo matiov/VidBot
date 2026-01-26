@@ -4,8 +4,8 @@ import numpy as np
 from typing import List, Optional, Tuple
 from collections import OrderedDict
 from einops import rearrange
-from models.layers_3d import SinusoidalPosEmb
-from models.attention import SelfAttentionBlock, CrossAttentionLayer
+from vidbot.models.layers_3d import SinusoidalPosEmb
+from vidbot.models.attention import SelfAttentionBlock, CrossAttentionLayer
 
 
 class FeaturePerceiver(nn.Module):
@@ -46,10 +46,8 @@ class FeaturePerceiver(nn.Module):
         self.decoder_dropout = decoder_dropout
         self.decoder_residual_dropout = decoder_residual_dropout
 
-        self.condition_adapter = nn.Linear(
-            condition_dim, self.encoder_q_input_channels, bias=True
-        )
-        
+        self.condition_adapter = nn.Linear(condition_dim, self.encoder_q_input_channels, bias=True)
+
         if time_emb_dim > 0:
             self.time_embedding_adapter = nn.Linear(
                 time_emb_dim, self.encoder_q_input_channels, bias=True
@@ -93,8 +91,7 @@ class FeaturePerceiver(nn.Module):
             residual_dropout=self.decoder_residual_dropout,
         )
         self.last_dim = self.decoder_q_input_channels
-        
-        
+
     def forward(
         self,
         x,
@@ -116,9 +113,7 @@ class FeaturePerceiver(nn.Module):
         enc_kv = self.encoder_adapter(x)  # [bs, num_points, enc_kv_dim]
         cond_feat = self.condition_adapter(condition_feat)  # [bs, 1, enc_q_dim]
         if time_embedding is not None and self.time_embedding_adapter is not None:
-            time_embedding = self.time_embedding_adapter(
-                time_embedding
-            )  # [bs, 1, enc_q_dim]
+            time_embedding = self.time_embedding_adapter(time_embedding)  # [bs, 1, enc_q_dim]
 
             enc_q = torch.cat([cond_feat, time_embedding], dim=1)  # [bs, 1 + 1, enc_q_dim]
         else:

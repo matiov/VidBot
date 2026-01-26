@@ -6,11 +6,11 @@ import torch.nn.functional as F
 import tqdm
 import numpy as np
 
-from models.layers_2d import ResNet50Encoder, ResNet50Decoder, PositionalEmbeddingV2
+from vidbot.models.layers_2d import ResNet50Encoder, ResNet50Decoder, PositionalEmbeddingV2
 import einops
 import torchvision.transforms as transforms
-from diffuser_utils.dataset_utils import compute_model_size
-from models.perceiver import FeaturePerceiver
+from vidbot.diffuser_utils.dataset_utils import compute_model_size
+from vidbot.models.perceiver import FeaturePerceiver
 
 
 class ContactPredictor(pl.LightningModule):
@@ -31,13 +31,11 @@ class ContactPredictor(pl.LightningModule):
         self.use_min_loss = use_min_loss
         self.transform = transforms.Compose(
             [
-                transforms.Normalize([0.485, 0.456, 0.406], [
-                                     0.229, 0.224, 0.225]),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ]
         )
         self.visual = ResNet50Encoder(input_channels=in_channels)
-        self.decoder = ResNet50Decoder(
-            output_channels=out_channels, use_skip=use_skip)
+        self.decoder = ResNet50Decoder(output_channels=out_channels, use_skip=use_skip)
         self.bottleneck_feature_key = self.decoder.bottleneck_feature_key
         self.latent_dim = self.decoder.latent_dim
         self.visual_proj = nn.Linear(self.latent_dim, 512)
@@ -58,8 +56,7 @@ class ContactPredictor(pl.LightningModule):
             ),
             nn.Linear(512, self.latent_dim),
         )
-        self.positional_embedding = PositionalEmbeddingV2(
-            d_model=512, max_len=400)
+        self.positional_embedding = PositionalEmbeddingV2(d_model=512, max_len=400)
 
     def forward(self, data_batch, training=False):
         outputs = {}
@@ -79,9 +76,9 @@ class ContactPredictor(pl.LightningModule):
         # Post-process the prediction
         pred_final = []
         pred_vfs = pred[:, : self.out_channels - 1]  # [B, 8, H, W]
-        pred_mask = pred[:, self.out_channels - 1:]  # [B, 1, H, W]
+        pred_mask = pred[:, self.out_channels - 1 :]  # [B, 1, H, W]
         for hi in range(0, self.out_channels - 1, 2):
-            pred_vf = pred_vfs[:, hi: hi + 2]  # [B, 2, H, W]
+            pred_vf = pred_vfs[:, hi : hi + 2]  # [B, 2, H, W]
             pred_vf = F.normalize(pred_vf, p=2, dim=1)  # [-1, 1]
             pred_vf = pred_vf.clamp(-1, 1)
             pred_final.append(pred_vf)

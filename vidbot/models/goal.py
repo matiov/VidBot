@@ -5,16 +5,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import tqdm
 import numpy as np
-from models.layers_2d import Decoder, Encoder
-from models.helpers import FocalLoss
-from models.clip import clip, tokenize
+from vidbot.models.layers_2d import Decoder, Encoder
+from vidbot.models.helpers import FocalLoss
+from vidbot.models.clip import clip, tokenize
 
 import torchvision.models as models
 import torchvision.transforms as transforms
 from torchvision.ops import roi_align, roi_pool
 from copy import deepcopy
-from models.layers_2d import load_clip
-from models.perceiver import FeaturePerceiver
+from vidbot.models.layers_2d import load_clip
+from vidbot.models.perceiver import FeaturePerceiver
 
 
 class GoalPredictor(pl.LightningModule):
@@ -85,8 +85,7 @@ class GoalPredictor(pl.LightningModule):
 
         self.transform = transforms.Compose(
             [
-                transforms.Normalize([0.485, 0.456, 0.406], [
-                                     0.229, 0.224, 0.225]),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ]
         )
 
@@ -96,14 +95,11 @@ class GoalPredictor(pl.LightningModule):
             else:
                 obj_dim = self.visual_feature_dim
 
-            self.object_encode_module = nn.Linear(
-                obj_dim, self.visual_feature_dim)
+            self.object_encode_module = nn.Linear(obj_dim, self.visual_feature_dim)
 
         if self.encode_action:
 
-            self.action_encode_module = nn.Linear(
-                self.visual_feature_dim, self.visual_feature_dim
-            )
+            self.action_encode_module = nn.Linear(self.visual_feature_dim, self.visual_feature_dim)
 
         if self.encode_bbox:
 
@@ -172,9 +168,7 @@ class GoalPredictor(pl.LightningModule):
 
         # Box information
         bbox = data_batch["bbox"]  # [B, 4]
-        bbox_batch_id = torch.arange(
-            batch_size, device=inputs.device
-        )  # Only one box per sample
+        bbox_batch_id = torch.arange(batch_size, device=inputs.device)  # Only one box per sample
         bbox = torch.cat([bbox_batch_id[:, None], bbox], dim=1)  # [B, 5]
 
         # Extract visual features
@@ -197,10 +191,8 @@ class GoalPredictor(pl.LightningModule):
                 context_feature_obj = einops.rearrange(
                     context_feature, "b (h w) c -> b c h w", h=h_out, w=w_out
                 )
-                spatial_scale = context_feature_obj.shape[-1] / \
-                    inputs.shape[-1]
-                assert spatial_scale == context_feature_obj.shape[-2] / \
-                    inputs.shape[-2]
+                spatial_scale = context_feature_obj.shape[-1] / inputs.shape[-1]
+                assert spatial_scale == context_feature_obj.shape[-2] / inputs.shape[-2]
 
                 context_feature_obj = roi_method(
                     context_feature_obj,
@@ -208,16 +200,11 @@ class GoalPredictor(pl.LightningModule):
                     spatial_scale=spatial_scale,
                     output_size=(roi_res, roi_res),
                 )  # [B, c, roi_res, roi_res]
-                object_feature = einops.rearrange(
-                    context_feature_obj, "b c h w -> b (h w) c"
-                )
-                object_feature = object_feature.mean(
-                    dim=1)[:, None]  # [B, 1, c]
+                object_feature = einops.rearrange(context_feature_obj, "b c h w -> b (h w) c")
+                object_feature = object_feature.mean(dim=1)[:, None]  # [B, 1, c]
             else:
                 raise NotImplementedError(
-                    "Object encode mode {} not implemented".format(
-                        self.object_encode_mode
-                    )
+                    "Object encode mode {} not implemented".format(self.object_encode_mode)
                 )
             object_feature = self.object_encode_module(object_feature)
 
@@ -226,8 +213,7 @@ class GoalPredictor(pl.LightningModule):
         if self.encode_action:
 
             action_feature = data_batch["action_feature"][:, None]
-            action_feature = self.action_encode_module(
-                action_feature)  # [B, 1, c]
+            action_feature = self.action_encode_module(action_feature)  # [B, 1, c]
 
             condition_feature.append(action_feature)
 
@@ -240,8 +226,7 @@ class GoalPredictor(pl.LightningModule):
             bbox_feature = bbox_feature[:, None]  # [B, 1, 64]
             condition_feature.append(bbox_feature)
 
-        condition_feature = torch.cat(
-            condition_feature, dim=-1)  # [B, 1, 2c+64)
+        condition_feature = torch.cat(condition_feature, dim=-1)  # [B, 1, 2c+64)
 
         if self.fuser is not None and len(condition_feature) > 0:
             feature = self.fuser(feature, condition_feature)
@@ -253,21 +238,16 @@ class GoalPredictor(pl.LightningModule):
         depth_feature = self.depth_fuser(depth_feature, verb_feature)
         pred_depth = self.depth_proj(depth_feature)
 
-        feature = einops.rearrange(
-            feature, "b (h w) c -> b c h w", h=h_out, w=w_out)
-        pred_depth = einops.rearrange(
-            pred_depth, "b (h w) c -> b c h w", h=h_out, w=w_out
-        )
+        feature = einops.rearrange(feature, "b (h w) c -> b c h w", h=h_out, w=w_out)
+        pred_depth = einops.rearrange(pred_depth, "b (h w) c -> b c h w", h=h_out, w=w_out)
 
         pred = self.decoder(feature)
         pred_depth = F.interpolate(
-            pred_depth, size=(
-                self.resolution[0], self.resolution[1]), mode="bilinear"
+            pred_depth, size=(self.resolution[0], self.resolution[1]), mode="bilinear"
         )
         # Postprocess the output
         if pred is not None:
-            pred_vf, pred_dres, pred_heatmap = pred[:,
-                                                    :2], pred_depth, pred[:, -1:]
+            pred_vf, pred_dres, pred_heatmap = pred[:, :2], pred_depth, pred[:, -1:]
             pred_vf = F.normalize(pred_vf, p=2, dim=1)  # [-1, 1]
             pred_vf = pred_vf.clamp(-1, 1)
             if "d_res_scale" in data_batch:
@@ -277,9 +257,7 @@ class GoalPredictor(pl.LightningModule):
                 )
                 pred_dres = pred_dres * data_batch["d_res_scale"]
             pred_d_final = start_pos_depth - pred_dres  # [B, 1, H, W]
-            pred = torch.cat(
-                [pred_vf, pred_d_final, pred_heatmap], dim=1
-            )  # [B, 4, H, W]
+            pred = torch.cat([pred_vf, pred_d_final, pred_heatmap], dim=1)  # [B, 4, H, W]
 
         outputs = {"pred": pred}
 

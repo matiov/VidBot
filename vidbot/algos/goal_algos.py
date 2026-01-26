@@ -5,9 +5,9 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 import torch.nn.functional as F
-from models.goal import GoalPredictor
-import diffuser_utils.dataset_utils as DatasetUtils
-from diffuser_utils.guidance_params import COMMON_ACTIONS
+from vidbot.models.goal import GoalPredictor
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+from vidbot.diffuser_utils.guidance_params import COMMON_ACTIONS
 import pandas as pd
 
 

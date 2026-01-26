@@ -10,8 +10,8 @@ from PIL import Image
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 from tqdm import tqdm
 
-from models.clip.model import build_model
-from models.clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
+from vidbot.models.clip.model import build_model
+from vidbot.models.clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 
 try:
     from torchvision.transforms import InterpolationMode
@@ -27,12 +27,12 @@ __all__ = ["available_models", "load", "tokenize"]
 _tokenizer = _Tokenizer()
 
 _MODELS = {
-    "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt", # 243MB
-    "RN101": "https://openaipublic.azureedge.net/clip/models/8fa8567bab74a42d41c5915025a8e4538c3bdbe8804a470a72f30b0d94fab599/RN101.pt", # 277MB
-    "RN50x4": "https://openaipublic.azureedge.net/clip/models/7e526bd135e493cef0776de27d5f42653e6b4c8bf9e0f653bb11773263205fdd/RN50x4.pt", #401MB
-    "RN50x16": "https://openaipublic.azureedge.net/clip/models/52378b407f34354e150460fe41077663dd5b39c54cd0bfd2b27167a4a06ec9aa/RN50x16.pt", # 629MB
-    "RN50x64": "https://openaipublic.azureedge.net/clip/models/be1cfb55d75a9666199fb2206c106743da0f6468c9d327f3e0d0a543a9919d9c/RN50x64.pt", # 1.2GB
-    "ViT-B/32": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt", # 334MB
+    "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt",  # 243MB
+    "RN101": "https://openaipublic.azureedge.net/clip/models/8fa8567bab74a42d41c5915025a8e4538c3bdbe8804a470a72f30b0d94fab599/RN101.pt",  # 277MB
+    "RN50x4": "https://openaipublic.azureedge.net/clip/models/7e526bd135e493cef0776de27d5f42653e6b4c8bf9e0f653bb11773263205fdd/RN50x4.pt",  # 401MB
+    "RN50x16": "https://openaipublic.azureedge.net/clip/models/52378b407f34354e150460fe41077663dd5b39c54cd0bfd2b27167a4a06ec9aa/RN50x16.pt",  # 629MB
+    "RN50x64": "https://openaipublic.azureedge.net/clip/models/be1cfb55d75a9666199fb2206c106743da0f6468c9d327f3e0d0a543a9919d9c/RN50x64.pt",  # 1.2GB
+    "ViT-B/32": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt",  # 334MB
     "ViT-B/16": "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt",  # 334MB
     "ViT-L/14": "https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt",
     "ViT-L/14@336px": "https://openaipublic.azureedge.net/clip/models/3035c92b350959924f9f00213499208652fc7ea050643e8b385c2dac08641f02/ViT-L-14-336px.pt",
@@ -50,10 +50,7 @@ def _download(url: str, root: str):
         raise RuntimeError(f"{download_target} exists and is not a regular file")
 
     if os.path.isfile(download_target):
-        if (
-            hashlib.sha256(open(download_target, "rb").read()).hexdigest()
-            == expected_sha256
-        ):
+        if hashlib.sha256(open(download_target, "rb").read()).hexdigest() == expected_sha256:
             return download_target
         else:
             warnings.warn(
@@ -77,13 +74,8 @@ def _download(url: str, root: str):
                 output.write(buffer)
                 loop.update(len(buffer))
 
-    if (
-        hashlib.sha256(open(download_target, "rb").read()).hexdigest()
-        != expected_sha256
-    ):
-        raise RuntimeError(
-            "Model has been downloaded but the SHA256 checksum does not not match"
-        )
+    if hashlib.sha256(open(download_target, "rb").read()).hexdigest() != expected_sha256:
+        raise RuntimeError("Model has been downloaded but the SHA256 checksum does not not match")
 
     return download_target
 
@@ -150,16 +142,12 @@ def load(
     elif os.path.isfile(name):
         model_path = name
     else:
-        raise RuntimeError(
-            f"Model {name} not found; available models = {available_models()}"
-        )
+        raise RuntimeError(f"Model {name} not found; available models = {available_models()}")
 
     with open(model_path, "rb") as opened_file:
         try:
             # loading JIT archive
-            model = torch.jit.load(
-                opened_file, map_location=device if jit else "cpu"
-            ).eval()
+            model = torch.jit.load(opened_file, map_location=device if jit else "cpu").eval()
             state_dict = None
         except RuntimeError:
             # loading saved state dict
@@ -181,9 +169,7 @@ def load(
         lambda: torch.ones([]).to(torch.device(device)), example_inputs=[]
     )
     device_node = [
-        n
-        for n in device_holder.graph.findAllNodes("prim::Constant")
-        if "Device" in repr(n)
+        n for n in device_holder.graph.findAllNodes("prim::Constant") if "Device" in repr(n)
     ][-1]
 
     def patch_device(module):
@@ -197,9 +183,7 @@ def load(
 
         for graph in graphs:
             for node in graph.findAllNodes("prim::Constant"):
-                if "value" in node.attributeNames() and str(node["value"]).startswith(
-                    "cuda"
-                ):
+                if "value" in node.attributeNames() and str(node["value"]).startswith("cuda"):
                     node.copyAttributes(device_node)
 
     model.apply(patch_device)
@@ -208,9 +192,7 @@ def load(
 
     # patch dtype to float32 on CPU
     if str(device) == "cpu":
-        float_holder = torch.jit.trace(
-            lambda: torch.ones([]).float(), example_inputs=[]
-        )
+        float_holder = torch.jit.trace(lambda: torch.ones([]).float(), example_inputs=[])
         float_input = list(float_holder.graph.findNode("aten::to").inputs())[1]
         float_node = float_input.node()
 

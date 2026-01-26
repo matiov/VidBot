@@ -9,7 +9,7 @@ import open3d as o3d
 import time
 import torch
 from math import ceil
-from models.clip import clip, tokenize
+from vidbot.models.clip import clip, tokenize
 
 
 def compute_null_text_embeddings(vlm, batch_size=1, device="cuda"):
@@ -207,9 +207,7 @@ class TSDFVolume:
         self._vol_bounds = vol_bounds
 
         self._vol_dim = [voxel_dim, voxel_dim, voxel_dim]
-        self._vox_size = float(
-            (self._vol_bounds[0, 1] - self._vol_bounds[0, 0]) / voxel_dim
-        )
+        self._vox_size = float((self._vol_bounds[0, 1] - self._vol_bounds[0, 0]) / voxel_dim)
         self._trunc_margin = num_margin * self._vox_size  # truncation on SDF
 
         # Check GPU
@@ -240,23 +238,17 @@ class TSDFVolume:
             indexing="ij",
         )
         self._vox_coords = (
-            torch.cat([xx.reshape(1, -1), yy.reshape(1, -1), zz.reshape(1, -1)], dim=0)
-            .int()
-            .T
+            torch.cat([xx.reshape(1, -1), yy.reshape(1, -1), zz.reshape(1, -1)], dim=0).int().T
         )
         if self._use_gpu:
             self._vox_coords = self._vox_coords.cuda()
 
         # World coordinates of voxel centers
-        self._world_coords = self.vox2world(
-            self._vol_origin, self._vox_coords, self._vox_size
-        )
+        self._world_coords = self.vox2world(self._vol_origin, self._vox_coords, self._vox_size)
         self.enable_color = enable_color
 
         # TSDF & weights
-        self._tsdf_vol = torch.ones(
-            size=self._vol_dim, device=self._device, dtype=torch.float32
-        )
+        self._tsdf_vol = torch.ones(size=self._vol_dim, device=self._device, dtype=torch.float32)
         self._weight_vol = torch.zeros(
             size=self._vol_dim, device=self._device, dtype=torch.float32
         )
@@ -268,6 +260,7 @@ class TSDFVolume:
         # Mesh paramters
         self._mesh = o3d.geometry.TriangleMesh()
         self.unknown_free = unknown_free
+
     @staticmethod
     def vox2world(vol_origin: torch.Tensor, vox_coords: torch.Tensor, vox_size):
         """
@@ -309,9 +302,7 @@ class TSDFVolume:
         :return: Points after transform.
         """
 
-        points_h = torch.cat(
-            [points, torch.ones((points.shape[0], 1), device=points.device)], 1
-        )
+        points_h = torch.cat([points, torch.ones((points.shape[0], 1), device=points.device)], 1)
         points_h = (transform @ points_h.T).T
 
         return points_h[:, :3]
@@ -359,9 +350,7 @@ class TSDFVolume:
         # world_points = geometry.vox2world(self._vol_origin, self._vox_coords, self._vox_size)
 
         # Get voxel centers under camera coordinates
-        world_points = self.ridgid_transform(
-            self._world_coords, cam_pose.inverse()
-        )  # [N^3, 3]
+        world_points = self.ridgid_transform(self._world_coords, cam_pose.inverse())  # [N^3, 3]
 
         # Get the pixel coordinates (u,v) of all voxels under current camere pose
         # Multiple voxels can be projected to a same (u,v)
@@ -374,17 +363,13 @@ class TSDFVolume:
             voxel_u >= 0,
             torch.logical_and(
                 voxel_u < img_w,
-                torch.logical_and(
-                    voxel_v >= 0, torch.logical_and(voxel_v < img_h, voxel_z > 0)
-                ),
+                torch.logical_and(voxel_v >= 0, torch.logical_and(voxel_v < img_h, voxel_z > 0)),
             ),
         )
 
         # Get depth value
         depth_value = torch.zeros(voxel_u.shape, device=self._device)
-        depth_value[pixel_mask] = depth_img[
-            voxel_v[pixel_mask].long(), voxel_u[pixel_mask].long()
-        ]
+        depth_value[pixel_mask] = depth_img[voxel_v[pixel_mask].long(), voxel_u[pixel_mask].long()]
 
         # Compute and Integrate TSDF
         sdf_value = depth_value - voxel_z  # Compute SDF
@@ -394,7 +379,7 @@ class TSDFVolume:
             )  # Truncate SDF
         else:
             voxel_mask = depth_value > 0  # Truncate SDF
-            
+
         tsdf_value = torch.minimum(
             torch.ones_like(sdf_value, device=self._device),
             sdf_value / self._trunc_margin,
@@ -432,11 +417,7 @@ class TSDFVolume:
 
         if self._verbose:
             print("# Update {} voxels.".format(len(tsdf_new)))
-            print(
-                "# Integration Timing: {:.5f} (second).".format(
-                    time.time() - time_begin
-                )
-            )
+            print("# Integration Timing: {:.5f} (second).".format(time.time() - time_begin))
 
     def get_mesh(self):
         """
@@ -477,9 +458,7 @@ class TSDFVolume:
                 color_vol_pt, vertices_pt, align_corners=True
             )  # [1, 3, 1, 1, N]
             vert_colors = vert_colors.squeeze().cpu().numpy().T
-            self._mesh.vertex_colors = o3d.utility.Vector3dVector(
-                vert_colors.astype(float)
-            )
+            self._mesh.vertex_colors = o3d.utility.Vector3dVector(vert_colors.astype(float))
 
         self._mesh.compute_vertex_normals()
         if self._verbose:
@@ -487,9 +466,7 @@ class TSDFVolume:
             print("# Meshing Timing: {:.5f} (second).".format(time.time() - time_begin))
         return self._mesh
 
-    def update_tsdf(
-        self, tsdf_old, tsdf_new, color_old, color_new, weight_old, obs_weight
-    ):
+    def update_tsdf(self, tsdf_old, tsdf_new, color_old, color_new, weight_old, obs_weight):
         """
         Update the TSDF value of given voxel
         V = (wv + WV) / w + W
@@ -501,12 +478,8 @@ class TSDFVolume:
         :return: Updated TSDF values & Updated weights.
         """
 
-        tsdf_vol_int = torch.empty_like(
-            tsdf_old, dtype=torch.float32, device=self._device
-        )
-        weight_new = torch.empty_like(
-            weight_old, dtype=torch.float32, device=self._device
-        )
+        tsdf_vol_int = torch.empty_like(tsdf_old, dtype=torch.float32, device=self._device)
+        weight_new = torch.empty_like(weight_old, dtype=torch.float32, device=self._device)
 
         weight_new = weight_old + obs_weight
         tsdf_vol_int = (weight_old * tsdf_old + obs_weight * tsdf_new) / weight_new
@@ -569,16 +542,12 @@ class TSDFVolume2(TSDFVolume):
         self._trunc_margin = num_margin * self._vox_size  # truncation on SDF
         # Adjust volume bounds and ensure C-order contiguous
         self._vol_dim = (
-            np.ceil(
-                (self._vol_bounds[:, 1] - self._vol_bounds[:, 0]) / self._voxel_size
-            )
+            np.ceil((self._vol_bounds[:, 1] - self._vol_bounds[:, 0]) / self._voxel_size)
             .copy(order="C")
             .astype(int)
         )
 
-        self._vol_bounds[:, 1] = (
-            self._vol_bounds[:, 0] + self._vol_dim * self._voxel_size
-        )
+        self._vol_bounds[:, 1] = self._vol_bounds[:, 0] + self._vol_dim * self._voxel_size
         self._vol_dim = self._vol_dim.tolist()
         # self._vol_origin = self._vol_bounds[:, 0].copy(order="C").astype(np.float32)
         # self._vol_dim = torch.tensor(self._vol_dim, device=self._device).int()
@@ -593,23 +562,17 @@ class TSDFVolume2(TSDFVolume):
             indexing="ij",
         )
         self._vox_coords = (
-            torch.cat([xx.reshape(1, -1), yy.reshape(1, -1), zz.reshape(1, -1)], dim=0)
-            .int()
-            .T
+            torch.cat([xx.reshape(1, -1), yy.reshape(1, -1), zz.reshape(1, -1)], dim=0).int().T
         )
         if self._use_gpu:
             self._vox_coords = self._vox_coords.cuda()
 
         # World coordinates of voxel centers
-        self._world_coords = self.vox2world(
-            self._vol_origin, self._vox_coords, self._vox_size
-        )
+        self._world_coords = self.vox2world(self._vol_origin, self._vox_coords, self._vox_size)
         self.enable_color = enable_color
 
         # TSDF & weights
-        self._tsdf_vol = torch.ones(
-            size=self._vol_dim, device=self._device, dtype=torch.float32
-        )
+        self._tsdf_vol = torch.ones(size=self._vol_dim, device=self._device, dtype=torch.float32)
         self._weight_vol = torch.zeros(
             size=self._vol_dim, device=self._device, dtype=torch.float32
         )

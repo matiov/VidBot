@@ -7,21 +7,19 @@ import torch.nn as nn
 import einops
 from einops.layers.torch import Rearrange
 
-from models.layers_2d import (
+from vidbot.models.layers_2d import (
     Downsample1d,
     Upsample1d,
     Conv1dBlock,
 )
 
-from models.layers_3d import SinusoidalPosEmb
-from models.perceiver import FeaturePerceiver
+from vidbot.models.layers_3d import SinusoidalPosEmb
+from vidbot.models.perceiver import FeaturePerceiver
 
 
 class ResidualTemporalMapBlockConcat(nn.Module):
 
-    def __init__(
-        self, inp_channels, out_channels, time_embed_dim, horizon, kernel_size=5
-    ):
+    def __init__(self, inp_channels, out_channels, time_embed_dim, horizon, kernel_size=5):
         super().__init__()
 
         self.time_mlp = nn.Sequential(

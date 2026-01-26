@@ -6,9 +6,9 @@ import torch.nn as nn
 import pytorch_lightning as pl
 import torch.nn.functional as F
 
-import diffuser_utils.dataset_utils as DatasetUtils
-from models.contact import ContactPredictor
-from diffuser_utils.guidance_params import COMMON_ACTIONS
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+from vidbot.models.contact import ContactPredictor
+from vidbot.diffuser_utils.guidance_params import COMMON_ACTIONS
 
 
 class ContactPredictorModule(pl.LightningModule):

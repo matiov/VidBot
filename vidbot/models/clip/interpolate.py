@@ -48,7 +48,11 @@ def interpolate_positional_embedding(
         int(w0) == patch_pos_embed_interp.shape[-2] and int(h0) == patch_pos_embed_interp.shape[-1]
     ), "Interpolation error."
 
-    patch_pos_embed_interp = patch_pos_embed_interp.permute(0, 2, 3, 1).reshape(-1, dim)  # (w0 * h0, dim)
+    patch_pos_embed_interp = patch_pos_embed_interp.permute(0, 2, 3, 1).reshape(
+        -1, dim
+    )  # (w0 * h0, dim)
     # Concat class token embedding and interpolated patch embeddings
-    pos_embed_interp = torch.cat([class_pos_embed, patch_pos_embed_interp], dim=0)  # (w0 * h0 + 1, dim)
+    pos_embed_interp = torch.cat(
+        [class_pos_embed, patch_pos_embed_interp], dim=0
+    )  # (w0 * h0 + 1, dim)
     return pos_embed_interp.to(x.dtype)

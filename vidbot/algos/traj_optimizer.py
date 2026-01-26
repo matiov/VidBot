@@ -1,10 +1,11 @@
 import torch
 import torch.nn.functional as F
 from scipy.signal import savgol_filter
-from models.layers_2d import BackprojectDepth, Project3D
+from vidbot.models.layers_2d import BackprojectDepth, Project3D
 from pytorch3d.transforms import rotation_6d_to_matrix, matrix_to_rotation_6d
 import numpy as np
 import cv2
+
 
 class TrajectoryOptimizer:
     def __init__(
@@ -52,17 +53,13 @@ class TrajectoryOptimizer:
         rgb_key = rgb_key.repeat(N, 1, 1, 1)
 
         # Prepare the depth
-        depth_tensors_tmp = (
-            depth_tensors * scale_tensors[:, None, None, None]
-        )  # To Colmap space
+        depth_tensors_tmp = depth_tensors * scale_tensors[:, None, None, None]  # To Colmap space
 
         # Compute the warping flow from i to k,
         points = self.backproject_depth(depth_tensors_tmp, K=intrinsics)  # [N, 3, H*W]
         points = points.permute(0, 2, 1)  # [N, H*W, 3]
-        pix_coords = self.project_3d(
-            points, K=intrinsics, T=T_kc_tensors
-        )  # [N, 2, H*W]
-        
+        pix_coords = self.project_3d(points, K=intrinsics, T=T_kc_tensors)  # [N, 2, H*W]
+
         # Acquire the backward pixel flow
         pix_coords[:, 0] = (pix_coords[:, 0] / (width - 1)) * 2 - 1
         pix_coords[:, 1] = (pix_coords[:, 1] / (height - 1)) * 2 - 1
@@ -75,24 +72,26 @@ class TrajectoryOptimizer:
             mode="bilinear",
             padding_mode="border",
             align_corners=True,
-        ) # In frame c
-        
+        )  # In frame c
+
         warped_masks_key = F.grid_sample(
             mask_key,
             pix_coords,
             mode="nearest",
             padding_mode="border",
             align_corners=True,
-        ) # In frame c
-        
+        )  # In frame c
+
         if mode == "points":
             # Warp the points
-            points_c = points # In frame c
-            points_c = points_c @ T_kc_tensors[:, :3, :3].transpose(
-                -1, -2
-            ) + T_kc_tensors[:, :3, 3].unsqueeze(-2) # In frame k
-            points_k = self.backproject_depth(depth_key, K=intrinsics) # In frame k
-            points_k = points_k.view(-1, 3, height, width) # [N, 3, H, W]
+            points_c = points  # In frame c
+            points_c = points_c @ T_kc_tensors[:, :3, :3].transpose(-1, -2) + T_kc_tensors[
+                :, :3, 3
+            ].unsqueeze(
+                -2
+            )  # In frame k
+            points_k = self.backproject_depth(depth_key, K=intrinsics)  # In frame k
+            points_k = points_k.view(-1, 3, height, width)  # [N, 3, H, W]
             points_k_to_c = F.grid_sample(
                 points_k,
                 pix_coords,
@@ -100,24 +99,26 @@ class TrajectoryOptimizer:
                 padding_mode="border",
                 align_corners=True,
             )
-            points_k_to_c = points_k_to_c.view(-1, 3, height, width) # [N, 3, H, W]
-            points_k_to_c = points_k_to_c.permute(0, 2, 3, 1) # [N, H, W, 3]
-            points_k_to_c = points_k_to_c.view(N, -1, 3) # [N, H*W, 3]
+            points_k_to_c = points_k_to_c.view(-1, 3, height, width)  # [N, 3, H, W]
+            points_k_to_c = points_k_to_c.permute(0, 2, 3, 1)  # [N, H, W, 3]
+            points_k_to_c = points_k_to_c.view(N, -1, 3)  # [N, H*W, 3]
             points_k_to_c = points_k_to_c.clone().detach()
-            
+
         # Warp the depth
         elif mode == "depth":
-            points_k_to_c = self.backproject_depth(
-                warped_depths_key, K=intrinsics
-            )  # In frame c
+            points_k_to_c = self.backproject_depth(warped_depths_key, K=intrinsics)  # In frame c
             points_k_to_c = points_k_to_c.permute(0, 2, 1)  # In frame c
-            points_c = points # In frame c
-            points_c = points_c @ T_kc_tensors[:, :3, :3].transpose(
-                -1, -2
-            ) + T_kc_tensors[:, :3, 3].unsqueeze(-2) # In frame k
+            points_c = points  # In frame c
+            points_c = points_c @ T_kc_tensors[:, :3, :3].transpose(-1, -2) + T_kc_tensors[
+                :, :3, 3
+            ].unsqueeze(
+                -2
+            )  # In frame k
             points_k_to_c = points_k_to_c @ T_kc_tensors[:, :3, :3].transpose(
                 -1, -2
-            ) + T_kc_tensors[:, :3, 3].unsqueeze(-2) # In frame k
+            ) + T_kc_tensors[:, :3, 3].unsqueeze(
+                -2
+            )  # In frame k
 
         else:
             raise ValueError("Invalid mode: {}".format(mode))
@@ -190,10 +191,10 @@ class TrajectoryOptimizer:
         scale_tensors_global = torch.ones_like(scale_init_tensors) * key_scale
         delta_scale = scale_init_tensors / scale_tensors_global
         delta_translation = torch.zeros_like(T_kc_tensors[:, :3, 3]).float()
-        delta_r6d = matrix_to_rotation_6d(
-            torch.eye(3, device=self.device).float()
-        )[None].repeat(len(T_kc_tensors), 1)
-    
+        delta_r6d = matrix_to_rotation_6d(torch.eye(3, device=self.device).float())[None].repeat(
+            len(T_kc_tensors), 1
+        )
+
         delta_scale.requires_grad = True
         delta_translation.requires_grad = optimize_pose
         delta_r6d.requires_grad = optimize_pose
@@ -214,9 +215,7 @@ class TrajectoryOptimizer:
             T_kc_tensors_curr = T_kc_tensors.clone()
             delta_rot = rotation_6d_to_matrix(delta_r6d).transpose(-1, -2)
             delta_T = (
-                torch.eye(4, device=self.device)
-                .float()[None]
-                .repeat(len(T_kc_tensors), 1, 1)
+                torch.eye(4, device=self.device).float()[None].repeat(len(T_kc_tensors), 1, 1)
             )
             delta_T[..., :3, :3] = delta_rot
             delta_T[..., :3, 3] = delta_translation
@@ -224,40 +223,30 @@ class TrajectoryOptimizer:
                 delta_T,
                 T_kc_tensors_curr,
             )
-            
-            _, points_c, points_k_to_c, masks_c, warped_masks_key = (
-                self.compute_warped_results(
-                    intr,
-                    rgb_tensors,
-                    depth_tensors,
-                    mask_tensors,
-                    scale_curr,
-                    key_rgb,
-                    key_depth,
-                    key_mask,
-                    key_scale,
-                    T_kc_tensors_curr,
-                    mode=self.warp_mode,
-                    verbose=verbose,
-                    return_color=verbose,
-                )
+
+            _, points_c, points_k_to_c, masks_c, warped_masks_key = self.compute_warped_results(
+                intr,
+                rgb_tensors,
+                depth_tensors,
+                mask_tensors,
+                scale_curr,
+                key_rgb,
+                key_depth,
+                key_mask,
+                key_scale,
+                T_kc_tensors_curr,
+                mode=self.warp_mode,
+                verbose=verbose,
+                return_color=verbose,
             )
             points_c = points_c.view(-1, height, width, 3).permute(0, 3, 1, 2)
-            points_k_to_c = points_k_to_c.view(-1, height, width, 3).permute(
-                0, 3, 1, 2
-            )
-            points_loss = F.mse_loss(
-                points_c, points_k_to_c, reduction="none"
-            )  # [N, 3, H, W]
+            points_k_to_c = points_k_to_c.view(-1, height, width, 3).permute(0, 3, 1, 2)
+            points_loss = F.mse_loss(points_c, points_k_to_c, reduction="none")  # [N, 3, H, W]
 
             masks_static = masks_c * warped_masks_key
 
-            points_loss = torch.cat(
-                [points_loss[:key_idx], points_loss[key_idx + 1 :]], dim=0
-            )
-            masks_static = torch.cat(
-                [masks_static[:key_idx], masks_static[key_idx + 1 :]], dim=0
-            )
+            points_loss = torch.cat([points_loss[:key_idx], points_loss[key_idx + 1 :]], dim=0)
+            masks_static = torch.cat([masks_static[:key_idx], masks_static[key_idx + 1 :]], dim=0)
             depth_filter = torch.cat(
                 [depth_tensors[:key_idx], depth_tensors[key_idx + 1 :]], dim=0
             ).repeat(1, 3, 1, 1)
@@ -271,22 +260,20 @@ class TrajectoryOptimizer:
             )
             loss_rot_reg = F.l1_loss(
                 delta_r6d,
-                matrix_to_rotation_6d(torch.eye(3, device=self.device).float())[None].repeat(len(T_kc_tensors), 1)
+                matrix_to_rotation_6d(torch.eye(3, device=self.device).float())[None].repeat(
+                    len(T_kc_tensors), 1
+                ),
             )
             loss_reg = loss_scale_reg + loss_translation_reg + loss_rot_reg
             loss = loss_geo + loss_reg
-            
+
             # Compute the loss and backprop
             loss.backward()
             optimizer.step()
-        
+
         T_kc_final = T_kc_tensors.clone()
         delta_rot = rotation_6d_to_matrix(delta_r6d).transpose(-1, -2)
-        delta_T = (
-            torch.eye(4, device=self.device)
-            .float()[None]
-            .repeat(len(T_kc_tensors), 1, 1)
-        )
+        delta_T = torch.eye(4, device=self.device).float()[None].repeat(len(T_kc_tensors), 1, 1)
         delta_T[..., :3, :3] = delta_rot
         delta_T[..., :3, 3] = delta_translation
         T_kc_final = torch.matmul(
@@ -331,9 +318,7 @@ class TrajectoryOptimizer:
         metric_d_tensors = torch.cat(metric_d_tensors).to(self.device)  # [S]
         colmap_d_tensors = torch.cat(colmap_d_tensors).to(self.device)  # [S]
         valid_d_tensors = torch.cat(valid_d_tensors).to(self.device)  # [S]
-        scale_init_tensors = (
-            torch.tensor(scale_init_tensors).float().to(self.device)
-        )  # [N]
+        scale_init_tensors = torch.tensor(scale_init_tensors).float().to(self.device)  # [N]
 
         # Start the optimization
         scale_global = torch.median(scale_init_tensors)
@@ -350,13 +335,13 @@ class TrajectoryOptimizer:
                 colmap_d_tensors,
                 reduction="none",
             )  # [S]
-            
+
             loss_d = loss_d * valid_d_tensors
             loss_d = loss_d.sum() / valid_d_tensors.sum()
             loss_d.backward()
             optimizer_scale.step()
         scale_global_final = (scale_global * delta_scale_global).detach().clone()
-        
+
         # Compute the amount of valid landmarks
         scale_global_np = scale_global_final.detach().cpu().numpy()
         key_idx, key_valid_diff_d = 0, -np.inf
@@ -372,14 +357,13 @@ class TrajectoryOptimizer:
             uv = uv[uv_mask]
             colmap_d = colmap_d[uv_mask]
             metric_d = depth[uv[:, 1], uv[:, 0]]  # [S]
-            valid_d = mask[uv[:, 1], uv[:, 0]] # [S]
-            diff_d = np.abs(colmap_d / scale_global_np  - metric_d) # [S]
+            valid_d = mask[uv[:, 1], uv[:, 0]]  # [S]
+            diff_d = np.abs(colmap_d / scale_global_np - metric_d)  # [S]
             diff_d[valid_d == 0] = np.inf
-            
+
             # Compute the amount of valid landmarks
             valid_diff_d = (diff_d < 0.07).sum()
             if valid_diff_d > key_valid_diff_d:
                 key_idx = ii
                 key_valid_diff_d = valid_diff_d
         return scale_init_tensors, scale_global_final, key_idx
-

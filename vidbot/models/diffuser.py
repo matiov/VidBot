@@ -1,24 +1,25 @@
 import torch
 import torch.nn as nn
 import numpy as np
-import diffuser_utils.tensor_utils as TensorUtils
+import vidbot.diffuser_utils.tensor_utils as TensorUtils
 from collections import OrderedDict
-from models.helpers import (
+from vidbot.models.helpers import (
     cosine_beta_schedule,
     extract,
     default,
     fourier_positional_encoding,
     compute_null_text_embeddings,
 )
-from models.temporal import TemporalMapUnet
-from models.feature_extractors import (
+from vidbot.models.temporal import TemporalMapUnet
+from vidbot.models.feature_extractors import (
     MultiScaleImageFeatureExtractor,
     TSDFMapFeatureExtractor,
     TSDFMapGeometryExtractor,
 )
 import torch.nn.functional as F
-from models.layers_2d import MLP
+from vidbot.models.layers_2d import MLP
 import math
+
 
 class DiffuserModel(nn.Module):
     def __init__(
@@ -34,10 +35,10 @@ class DiffuserModel(nn.Module):
         base_dim=32,
         dim_mults=[2, 4, 8],
         vlm_feature_dim=512,
-        object_cond_feature_dim=256,  
-        spatial_cond_feature_dim=0,  
-        action_cond_feature_dim=256,  
-        map_grid_feature_dim=64, 
+        object_cond_feature_dim=256,
+        spatial_cond_feature_dim=0,
+        action_cond_feature_dim=256,
+        map_grid_feature_dim=64,
         map_extractor_arch="TSDFMapGeometryExtractor",
         diffuser_model_arch="TemporalMapUnet",
         diffuser_use_preceiver=False,
@@ -53,7 +54,7 @@ class DiffuserModel(nn.Module):
         force_start=False,
         force_end=False,
         use_feature_decoder=True,
-        **kwargs
+        **kwargs,
     ):
         super(DiffuserModel, self).__init__()
         self.n_timesteps = int(n_timesteps)
@@ -78,7 +79,7 @@ class DiffuserModel(nn.Module):
         self.goal_conditioned = goal_conditioned
         self.force_start = force_start
         self.force_end = force_end
- 
+
         if self.goal_conditioned and self.spatial_cond_feature_dim > 0:
             self.cond_feature_dim += 2 * 3 * 8
 
@@ -87,7 +88,7 @@ class DiffuserModel(nn.Module):
         if diffuser_model_arch == "TemporalMapUnet":
             self.transition_in_dim = self.observation_dim
             if self.use_map_feat_grid:
-                self.transition_in_dim += map_grid_feature_dim # 64+3
+                self.transition_in_dim += map_grid_feature_dim  # 64+3
             # According to Trace, the model directly predicts the start state from the noisy state
             self.model = TemporalMapUnet(
                 horizon=self.horizon,
@@ -109,7 +110,7 @@ class DiffuserModel(nn.Module):
                     voxel_resolution=voxel_resolution,
                     voxel_feature_dim=map_grid_feature_dim,
                 )
-                
+
             elif map_extractor_arch == "TSDFMapGeometryExtractor":
                 self.map_feature_extractor = TSDFMapGeometryExtractor(
                     self.context_image_shape,
@@ -119,10 +120,10 @@ class DiffuserModel(nn.Module):
             else:
                 print("unknown map_extractor_arch:", map_extractor_arch)
                 raise
-            
+
             # print("Map feature extractor size: ")
             # compute_model_size(self.map_feature_extractor)
-            
+
         self.object_feature_extractor = MultiScaleImageFeatureExtractor(
             embedding_dim=object_cond_feature_dim
         )
@@ -135,8 +136,8 @@ class DiffuserModel(nn.Module):
                 batch_first=True,
             ),
             nn.Linear(vlm_feature_dim, action_cond_feature_dim),
-        )        
-        
+        )
+
         # MLP(
         #     input_dim=vlm_feature_dim,
         #     output_dim=action_cond_feature_dim,
@@ -153,7 +154,7 @@ class DiffuserModel(nn.Module):
         else:
             self.min_bounds = None
             self.max_bounds = None
-        
+
     def register_diffusion_params(self):
         betas = cosine_beta_schedule(self.n_timesteps)
         alphas = 1.0 - betas
@@ -166,32 +167,20 @@ class DiffuserModel(nn.Module):
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
         self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
-        self.register_buffer(
-            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
-        )
-        self.register_buffer(
-            "log_one_minus_alphas_cumprod", torch.log(1.0 - alphas_cumprod)
-        )
-        self.register_buffer(
-            "sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod)
-        )
-        self.register_buffer(
-            "sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1)
-        )
+        self.register_buffer("sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod))
+        self.register_buffer("log_one_minus_alphas_cumprod", torch.log(1.0 - alphas_cumprod))
+        self.register_buffer("sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod))
+        self.register_buffer("sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1))
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
-        posterior_variance = (
-            betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
-        )
+        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         self.register_buffer("posterior_variance", posterior_variance)
 
         # calculations for class-free guidance
         self.sqrt_alphas_over_one_minus_alphas_cumprod = torch.sqrt(
             alphas_cumprod / (1.0 - alphas_cumprod)
         )
-        self.sqrt_recip_one_minus_alphas_cumprod = 1.0 / torch.sqrt(
-            1.0 - alphas_cumprod
-        )
+        self.sqrt_recip_one_minus_alphas_cumprod = 1.0 / torch.sqrt(1.0 - alphas_cumprod)
 
         ## log calculation clipped because the posterior variance
         ## is 0 at the beginning of the diffusion chain
@@ -209,11 +198,10 @@ class DiffuserModel(nn.Module):
         )
 
     def set_guidance(self, guidance):
-        '''
+        """
         Instantiates test-time guidance functions using the list of configs (dicts) passed in.
-        '''
+        """
         self.current_guidance = guidance
-
 
     def scale_trajectory(self, traj, min_bound, max_bound):
         """
@@ -318,9 +306,7 @@ class DiffuserModel(nn.Module):
         guide_clean=False,
     ):
         use_class_free_guide = class_free_guide_w != 0.0
-        aux_info = self.get_aux_info(
-            data_batch, include_class_free_cond=use_class_free_guide
-        )
+        aux_info = self.get_aux_info(data_batch, include_class_free_cond=use_class_free_guide)
         cond_samp_out = self.conditional_sample(
             data_batch,
             horizon=None,
@@ -337,11 +323,9 @@ class DiffuserModel(nn.Module):
         gt_traj_min_bound = data_batch["gt_traj_min_bound"]
         gt_traj_max_bound = data_batch["gt_traj_max_bound"]
 
-        traj = self.descale_trajectory(
-            traj_scaled, gt_traj_min_bound, gt_traj_max_bound
-        )
+        traj = self.descale_trajectory(traj_scaled, gt_traj_min_bound, gt_traj_max_bound)
         # map_feats = aux_info["color_features_pyramid"][-1]
-        outputs = {"predictions": traj} #, "map_feature": map_feats}
+        outputs = {"predictions": traj}  # , "map_feature": map_feats}
         if "guide_losses" in cond_samp_out:
             outputs["guide_losses"] = cond_samp_out["guide_losses"]
         return outputs
@@ -394,27 +378,23 @@ class DiffuserModel(nn.Module):
         gt_traj_min_bound = data_batch["gt_traj_min_bound"]
         gt_traj_max_bound = data_batch["gt_traj_max_bound"]
         traj_obs = torch.stack([start_pos, end_pos], dim=1)  # [B, 2, 3]
-        traj_obs = self.scale_trajectory(
-            traj_obs, gt_traj_min_bound, gt_traj_max_bound
-        )
-        start_pos_scaled = traj_obs[:, 0, :3] # [B, 3]
-        end_pos_scaled = traj_obs[:, -1, :3] # [B, 3]
-        
-        context_scale = (
-            math.sqrt(3) * (voxel_bounds[:, 1] - voxel_bounds[:, 0])[:, None]
-        )
+        traj_obs = self.scale_trajectory(traj_obs, gt_traj_min_bound, gt_traj_max_bound)
+        start_pos_scaled = traj_obs[:, 0, :3]  # [B, 3]
+        end_pos_scaled = traj_obs[:, -1, :3]  # [B, 3]
+
+        context_scale = math.sqrt(3) * (voxel_bounds[:, 1] - voxel_bounds[:, 0])[:, None]
 
         spatial_feature = torch.cat([start_pos_scaled, context_scale], dim=-1)
         if self.goal_conditioned:
             spatial_feature = torch.cat([end_pos_scaled, spatial_feature], dim=-1)
-                    
+
         # spatial_feature = torch.cat([start_pos, context_scale], dim=-1)
         # if self.goal_conditioned:
         #     spatial_feature = torch.cat([end_pos, spatial_feature], dim=-1)
         spatial_feature = fourier_positional_encoding(
             spatial_feature, 8
         )  # [B, 4] => [B, 2*4*8] | [B, 7] => [B, 2*7*8]
-        
+
         # Acauire the object features (conditional features)
         # import time
         # time_start = time.time()
@@ -426,10 +406,8 @@ class DiffuserModel(nn.Module):
         action_feature = self.action_feature_extractor(action_feature_vlm)
 
         # Combine all the conditional features
-        cond_feature = torch.cat(
-            [object_feature, action_feature], dim=-1
-        )
-        
+        cond_feature = torch.cat([object_feature, action_feature], dim=-1)
+
         if self.spatial_cond_feature_dim > 0:
             # print("Spatial feature is added to the conditional feature")
             cond_feature = torch.cat([cond_feature, spatial_feature], dim=-1)
@@ -462,13 +440,9 @@ class DiffuserModel(nn.Module):
 
         if include_class_free_cond:
             object_color_non_cond = torch.ones_like(object_color) * self.cond_fill_value
-            object_feature_non_cond = self.object_feature_extractor(
-                object_color_non_cond
-            )
+            object_feature_non_cond = self.object_feature_extractor(object_color_non_cond)
             action_feature_non_cond = data_batch["action_feature_null"]
-            action_feature_non_cond = self.action_feature_extractor(
-                action_feature_non_cond
-            )
+            action_feature_non_cond = self.action_feature_extractor(action_feature_non_cond)
             non_cond_feature = torch.cat(
                 [object_feature_non_cond, action_feature_non_cond],
                 dim=-1,
@@ -476,19 +450,21 @@ class DiffuserModel(nn.Module):
             if self.spatial_cond_feature_dim > 0:
                 non_cond_spatial_feature = torch.cat([start_pos_scaled, context_scale], dim=-1)
                 if self.goal_conditioned:
-                    end_pos_non_cond = torch.ones_like(end_pos).fill_(-1e3)[:, None] # [B, 1, 3]
+                    end_pos_non_cond = torch.ones_like(end_pos).fill_(-1e3)[:, None]  # [B, 1, 3]
                     end_pos_non_cond_scaled = self.scale_trajectory(
                         end_pos_non_cond, gt_traj_min_bound, gt_traj_max_bound
-                    )[:, 0, :3] # [B, 3]
-                    non_cond_spatial_feature = torch.cat([end_pos_non_cond_scaled, 
-                                                          non_cond_spatial_feature], dim=-1)
-                
+                    )[
+                        :, 0, :3
+                    ]  # [B, 3]
+                    non_cond_spatial_feature = torch.cat(
+                        [end_pos_non_cond_scaled, non_cond_spatial_feature], dim=-1
+                    )
+
                 non_cond_spatial_feature = fourier_positional_encoding(
                     non_cond_spatial_feature, 8
                 )  # [B, 4] => [B, 2*4*8] | [B, 7] => [B, 2*7*8]
-                            
-                non_cond_feature = torch.cat([non_cond_feature, non_cond_spatial_feature], dim=-1)
 
+                non_cond_feature = torch.cat([non_cond_feature, non_cond_spatial_feature], dim=-1)
 
             aux_info["non_cond_feat"] = non_cond_feature
 
@@ -506,10 +482,7 @@ class DiffuserModel(nn.Module):
 
     def predict_noise_from_start(self, x_t, t, x_start):
         return (
-            extract(
-                self.sqrt_recip_one_minus_alphas_cumprod.to(x_t.device), t, x_t.shape
-            )
-            * x_t
+            extract(self.sqrt_recip_one_minus_alphas_cumprod.to(x_t.device), t, x_t.shape) * x_t
             - extract(
                 self.sqrt_alphas_over_one_minus_alphas_cumprod.to(x_t.device),
                 t,
@@ -524,9 +497,7 @@ class DiffuserModel(nn.Module):
             + extract(self.posterior_mean_coef2, t, x_t.shape) * x_t
         )
         posterior_variance = extract(self.posterior_variance, t, x_t.shape)
-        posterior_log_variance_clipped = extract(
-            self.posterior_log_variance_clipped, t, x_t.shape
-        )
+        posterior_log_variance_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def guidance(self, x, t, data_batch, aux_info, num_samp=1, return_grad_of=None):
@@ -539,9 +510,7 @@ class DiffuserModel(nn.Module):
             return_grad_of: which variable to take gradient of guidance loss wrt, if not given,
                             takes wrt the input x.
         """
-        assert (
-            self.current_guidance is not None
-        ), "Must instantiate guidance object before calling"
+        assert self.current_guidance is not None, "Must instantiate guidance object before calling"
         bsize = int(x.size(0) / num_samp)
         horizon = x.size(1)
         with torch.enable_grad():
@@ -570,9 +539,7 @@ class DiffuserModel(nn.Module):
         if class_free_guide_w != 0.0:
             x_non_cond_inp = x.clone()
             if self.use_map_feat_grid:
-                map_feat_traj = self.query_map_feat_grid(
-                    x_non_cond_inp.detach(), aux_info
-                )
+                map_feat_traj = self.query_map_feat_grid(x_non_cond_inp.detach(), aux_info)
                 x_non_cond_inp = torch.cat([x_non_cond_inp, map_feat_traj], dim=-1)
 
             # model predicts noise from that brings t to t-1
@@ -589,9 +556,8 @@ class DiffuserModel(nn.Module):
                     x_t=x, t=t, x_start=model_non_cond_prediction
                 )  # noise 2
                 class_free_guide_noise = (
-                    (1 + class_free_guide_w) * model_pred_noise
-                    - class_free_guide_w * model_non_cond_pred_noise
-                )  # compose noise
+                    1 + class_free_guide_w
+                ) * model_pred_noise - class_free_guide_w * model_non_cond_pred_noise  # compose noise
                 model_prediction = self.predict_start_from_noise(
                     x_t=x, t=t, noise=class_free_guide_noise, force_noise=True
                 )  # get actual model prediction by sampling back
@@ -602,9 +568,8 @@ class DiffuserModel(nn.Module):
                 model_pred_noise = model_prediction
                 model_non_cond_pred_noise = model_non_cond_prediction
                 class_free_guide_noise = (
-                    (1 + class_free_guide_w) * model_pred_noise
-                    - class_free_guide_w * model_non_cond_pred_noise
-                )
+                    1 + class_free_guide_w
+                ) * model_pred_noise - class_free_guide_w * model_non_cond_pred_noise
                 model_prediction = class_free_guide_noise
                 # x_recon = self.predict_start_from_noise(
                 #     x, t=t, noise=model_prediction, force_noise=True
@@ -657,9 +622,7 @@ class DiffuserModel(nn.Module):
         guide_losses = None
         guide_grad = torch.zeros_like(model_mean)
         if self.current_guidance is not None and apply_guidance:
-            assert (
-                not self.predict_epsilons
-            ), "Guidance not implemented for epsilon prediction"
+            assert not self.predict_epsilons, "Guidance not implemented for epsilon prediction"
             if guide_clean:  # Return gradients of x_{t-1}
                 # We want to guide the predicted clean traj from model, not the noisy one
                 model_clean_pred = q_posterior_in[0]
@@ -680,13 +643,11 @@ class DiffuserModel(nn.Module):
 
             # NOTE: empirally, scaling by the variance (sigma) seems to degrade results
             guide_grad = nonzero_mask * guide_grad  # * sigma
-        
+
         noise = nonzero_mask * sigma * noise
-        
+
         if self.current_guidance is not None and guide_clean:
-            assert (
-                not self.predict_epsilons
-            ), "Guidance not implemented for epsilon prediction"
+            assert not self.predict_epsilons, "Guidance not implemented for epsilon prediction"
             # perturb clean trajectory
             guided_clean = (
                 q_posterior_in[0] - guide_grad
@@ -710,9 +671,7 @@ class DiffuserModel(nn.Module):
             gt_traj_max_bound = data_batch["gt_traj_max_bound"]
 
             traj_obs = torch.stack([start_pos, end_pos], dim=1)  # [B, 2, 3]
-            traj_obs = self.scale_trajectory(
-                traj_obs, gt_traj_min_bound, gt_traj_max_bound
-            )
+            traj_obs = self.scale_trajectory(traj_obs, gt_traj_min_bound, gt_traj_max_bound)
 
             x_out[:, 0, :3] = traj_obs[:, 0, :3]
 
@@ -720,9 +679,7 @@ class DiffuserModel(nn.Module):
                 x_out[:, -1, :3] = traj_obs[:, -1, :3]
 
         if self.current_guidance is not None and eval_final_guide_loss:
-            assert (
-                not self.predict_epsilons
-            ), "Guidance not implemented for epsilon prediction"
+            assert not self.predict_epsilons, "Guidance not implemented for epsilon prediction"
             # eval guidance loss one last time for filtering if desired
             #       (even if not applied during sampling)
             _, guide_losses = self.guidance(
@@ -775,18 +732,14 @@ class DiffuserModel(nn.Module):
             gt_traj_min_bound = data_batch["gt_traj_min_bound"]
             gt_traj_max_bound = data_batch["gt_traj_max_bound"]
             traj_obs = torch.stack([start_pos, end_pos], dim=1)  # [B, 2, 3]
-            traj_obs = self.scale_trajectory(
-                traj_obs, gt_traj_min_bound, gt_traj_max_bound
-            )
+            traj_obs = self.scale_trajectory(traj_obs, gt_traj_min_bound, gt_traj_max_bound)
 
             x[:, 0, :3] = traj_obs[:, 0, :3]
             if self.force_end:
                 x[:, -1, :3] = traj_obs[:, -1, :3]
 
         for i in steps:
-            timesteps = torch.full(
-                (batch_size * num_samp,), i, device=device, dtype=torch.long
-            )
+            timesteps = torch.full((batch_size * num_samp,), i, device=device, dtype=torch.long)
             x, guide_losses = self.p_sample(
                 x,
                 timesteps,
@@ -813,7 +766,7 @@ class DiffuserModel(nn.Module):
         out_dict = {"pred_trajectory": x}
         if return_guidance_losses:
             out_dict["guide_losses"] = guide_losses
-        
+
         if return_diffusion:
             diffusion = [
                 TensorUtils.reshape_dimensions(
@@ -927,5 +880,3 @@ class DiffuserModel(nn.Module):
             return F.mse_loss
         else:
             raise ValueError(f"invalid loss type {self.loss_type}")
-
-

@@ -8,6 +8,7 @@ from einops import rearrange
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
+
 class RotaryPositionEmbedding:
     # Specified in https://arxiv.org/abs/2104.09864
     # Modified from https://github.com/lucidrains/rotary-embedding-torch
@@ -276,7 +277,12 @@ class CrossAttention(nn.Module):
             x_kv = self.kv_norm(x_kv)
 
         return self.attention(
-            x_q, x_kv, pad_mask=pad_mask, rot_pos_emb_q=rot_pos_emb_q, rot_pos_emb_k=rot_pos_emb_k, kv_cache=kv_cache
+            x_q,
+            x_kv,
+            pad_mask=pad_mask,
+            rot_pos_emb_q=rot_pos_emb_q,
+            rot_pos_emb_k=rot_pos_emb_k,
+            kv_cache=kv_cache,
         )
 
 
@@ -337,7 +343,9 @@ class AbstractAttentionLayer(nn.Sequential):
     def forward(self, *args, kv_cache: Optional[KVCache] = None, **kwargs):
         attn_output = self[0](*args, kv_cache=kv_cache, **kwargs)
         mlp_output = self[1](attn_output.last_hidden_state)
-        return ModuleOutput(last_hidden_state=mlp_output.last_hidden_state, kv_cache=attn_output.kv_cache)
+        return ModuleOutput(
+            last_hidden_state=mlp_output.last_hidden_state, kv_cache=attn_output.kv_cache
+        )
 
 
 class CrossAttentionLayer(AbstractAttentionLayer):
@@ -453,7 +461,6 @@ class SelfAttentionBlock(nn.Sequential):
             for _ in range(num_layers)
         ]
 
-        
         self.num_rotary_layers = num_rotary_layers
         super().__init__(*layers)
 
@@ -485,6 +492,7 @@ class SelfAttentionBlock(nn.Sequential):
                 kv_cache_updated.append(output.kv_cache)
 
         return ModuleOutput(last_hidden_state=x, kv_cache=kv_cache_updated)
+
 
 class MLP(nn.Sequential):
     def __init__(self, num_channels: int, widening_factor: int, bias: bool = True):

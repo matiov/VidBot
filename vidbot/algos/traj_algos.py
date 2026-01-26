@@ -6,13 +6,13 @@ import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as pl
 import torch.nn.functional as F
-import diffuser_utils.dataset_utils as DatasetUtils
-from models.diffuser import DiffuserModel
-from models.helpers import EMA
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+from vidbot.models.diffuser import DiffuserModel
+from vidbot.models.helpers import EMA
 import open3d as o3d
-from diffuser_utils.guidance_params import COMMON_ACTIONS
+from vidbot.diffuser_utils.guidance_params import COMMON_ACTIONS
 import torchvision
- 
+
 
 class TrajectoryDiffusionModule(pl.LightningModule):
     def __init__(self, algo_config):
@@ -23,7 +23,6 @@ class TrajectoryDiffusionModule(pl.LightningModule):
         # Initialize the diffuser
         policy_kwargs = algo_config.model
         self.nets["policy"] = DiffuserModel(**policy_kwargs)
-
 
     @torch.no_grad()
     def encode_action(self, data_batch, clip_model, max_length=20):
@@ -58,16 +57,15 @@ class TrajectoryDiffusionModule(pl.LightningModule):
         data_batch.update({"action_feature": action_feature.float()})
         data_batch.update({"verb_feature": verb_feature.float()})
 
-
     def forward(
         self,
         data_batch,
         num_samp=1,
         return_diffusion=False,
-        return_guidance_losses=False,   
-        apply_guidance=False,   
+        return_guidance_losses=False,
+        apply_guidance=False,
         class_free_guide_w=0.0,
-        guide_clean=False,  
+        guide_clean=False,
     ):
         curr_policy = self.nets["policy"]
         return curr_policy(
@@ -108,8 +106,7 @@ class TrajectoryDiffusionModule(pl.LightningModule):
             )
 
             colors_scene = color.copy()[scene_ids[0], scene_ids[1]]
-            pcd_scene = DatasetUtils.visualize_points(
-                points_scene, colors_scene)
+            pcd_scene = DatasetUtils.visualize_points(points_scene, colors_scene)
             # gt_traj_vis = DatasetUtils.visualize_3d_trajectory(
             #     gt_traj, size=0.02, cmap_name="viridis"
             # )
@@ -125,8 +122,7 @@ class TrajectoryDiffusionModule(pl.LightningModule):
                     )
                     if len(pred_trajs) > 1:
                         _pred_traj_vis = [
-                            s.paint_uniform_color(pred_traj_colors[pi])
-                            for s in _pred_traj_vis
+                            s.paint_uniform_color(pred_traj_colors[pi]) for s in _pred_traj_vis
                         ]
 
                     pred_traj_vis = _pred_traj_vis[0]
@@ -134,7 +130,7 @@ class TrajectoryDiffusionModule(pl.LightningModule):
                         pred_traj_vis += _pred_traj_vis[ii]
 
                     vis_o3d += [pred_traj_vis]
- 
+
             if window:
                 o3d.visualization.draw(vis_o3d)
 

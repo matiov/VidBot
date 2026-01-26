@@ -6,13 +6,13 @@ import colorsys
 import json
 from scipy.interpolate import CubicHermiteSpline, PchipInterpolator
 import torch
-from models.layers_2d import Project3D, BackprojectDepth
+from vidbot.models.layers_2d import Project3D, BackprojectDepth
 import flow_vis
 import torch.nn.functional as F
-from models.clip import clip
+from vidbot.models.clip import clip
 from typing import List
 from sklearn.cluster import KMeans
-from models.helpers import get_view_frustum, TSDFVolume
+from vidbot.models.helpers import get_view_frustum, TSDFVolume
 from torchvision import transforms as T
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
@@ -99,26 +99,20 @@ def crop_and_pad_image(
         tmpImg = img[upper:bottom, left:right]
         if not resize:
             if channel == 3:
-                outImg = np.ones(
-                    (int(scale), int(scale), channel), dtype=dtype) * 0.5
+                outImg = np.ones((int(scale), int(scale), channel), dtype=dtype) * 0.5
             else:
-                outImg = np.zeros(
-                    (int(scale), int(scale), channel), dtype=dtype)
+                outImg = np.zeros((int(scale), int(scale), channel), dtype=dtype)
             outImg[
-                int(scale / 2.0 - (bottom - upper) / 2.0 + 0.5): (
-                    int(scale / 2.0 - (bottom - upper) /
-                        2.0 + 0.5) + (bottom - upper)
+                int(scale / 2.0 - (bottom - upper) / 2.0 + 0.5) : (
+                    int(scale / 2.0 - (bottom - upper) / 2.0 + 0.5) + (bottom - upper)
                 ),
-                int(scale / 2.0 - (right - left) / 2.0 + 0.5): (
-                    int(scale / 2.0 - (right - left) /
-                        2.0 + 0.5) + (right - left)
+                int(scale / 2.0 - (right - left) / 2.0 + 0.5) : (
+                    int(scale / 2.0 - (right - left) / 2.0 + 0.5) + (right - left)
                 ),
                 :,
             ] = tmpImg
             return outImg
-        resizeImg = cv2.resize(
-            tmpImg, (resize_wd, resize_ht), interpolation=interpolation
-        )
+        resizeImg = cv2.resize(tmpImg, (resize_wd, resize_ht), interpolation=interpolation)
         # print(tmpImg.shape, scale)
         if len(resizeImg.shape) < 3:
             resizeImg = np.expand_dims(
@@ -130,10 +124,10 @@ def crop_and_pad_image(
         else:
             outImg = np.zeros((int(res), int(res), channel), dtype=dtype)
         outImg[
-            int(res / 2.0 - resize_ht / 2.0 + 0.5): (
+            int(res / 2.0 - resize_ht / 2.0 + 0.5) : (
                 int(res / 2.0 - resize_ht / 2.0 + 0.5) + resize_ht
             ),
-            int(res / 2.0 - resize_wd / 2.0 + 0.5): (
+            int(res / 2.0 - resize_wd / 2.0 + 0.5) : (
                 int(res / 2.0 - resize_wd / 2.0 + 0.5) + resize_wd
             ),
             :,
@@ -198,8 +192,8 @@ def crop_image(image, bbox, pad_ratio=1.5):
     y2_crop = min(height, crop_center[1] + crop_size // 2)
     cropped_image = np.zeros((crop_size, crop_size, 3), dtype=np.uint8)
     cropped_image[
-        (crop_size - (y2_crop - y1_crop)): (crop_size + (y2_crop - y1_crop)),
-        (crop_size - (x2_crop - x1_crop)): (crop_size + (x2_crop - x1_crop)),
+        (crop_size - (y2_crop - y1_crop)) : (crop_size + (y2_crop - y1_crop)),
+        (crop_size - (x2_crop - x1_crop)) : (crop_size + (x2_crop - x1_crop)),
     ] = image[y1_crop:y2_crop, x1_crop:x2_crop]
     return cropped_image
 
@@ -209,8 +203,8 @@ def center_crop_image(img, crop_height, corp_width):
     startx = width // 2 - (corp_width // 2)
     starty = height // 2 - (crop_height // 2)
     cropped_image = img[
-        starty: starty + crop_height,
-        startx: startx + corp_width,
+        starty : starty + crop_height,
+        startx : startx + corp_width,
     ]
     return cropped_image
 
@@ -230,9 +224,9 @@ def resize_image_keep_aspect_ratio(image, height, width):
         new_image = np.zeros((target_size[0], target_size[1], image.shape[2]))
     new_image = new_image.astype(image.dtype)
     if dim == 0:
-        new_image[size_diff_dim: size_diff_dim + _image.shape[0], :] = _image
+        new_image[size_diff_dim : size_diff_dim + _image.shape[0], :] = _image
     else:
-        new_image[:, size_diff_dim: size_diff_dim + _image.shape[1]] = _image
+        new_image[:, size_diff_dim : size_diff_dim + _image.shape[1]] = _image
     return new_image
 
 
@@ -262,12 +256,9 @@ def visualize_sphere_o3d(center, color=[1, 0, 0], size=0.03):
 
 def visualize_3d_trajectory(trajectory, size=0.03, cmap_name="plasma", invert=False):
     vis_o3d = []
-    traj_color = get_heatmap(
-        np.arange(len(trajectory)), cmap_name=cmap_name, invert=invert
-    )
+    traj_color = get_heatmap(np.arange(len(trajectory)), cmap_name=cmap_name, invert=invert)
     for i, traj_point in enumerate(trajectory):
-        vis_o3d.append(visualize_sphere_o3d(
-            traj_point, color=traj_color[i], size=size))
+        vis_o3d.append(visualize_sphere_o3d(traj_point, color=traj_color[i], size=size))
     return vis_o3d
 
 
@@ -321,22 +312,17 @@ def get_3d_bbox(size, shift=0):
 
 def spline_interpolation(fill_indices, traj):
     fill_times = np.array(fill_indices, dtype=np.float32)
-    fill_traj = np.array(
-        [traj[ii] for ii, idx in enumerate(fill_indices)], dtype=np.float32
-    )
+    fill_traj = np.array([traj[ii] for ii, idx in enumerate(fill_indices)], dtype=np.float32)
     dt = fill_times[2:] - fill_times[:-2]
-    dt = np.hstack([fill_times[1] - fill_times[0], dt,
-                   fill_times[-1] - fill_times[-2]])
+    dt = np.hstack([fill_times[1] - fill_times[0], dt, fill_times[-1] - fill_times[-2]])
     dx = fill_traj[2:] - fill_traj[:-2]
-    dx = np.hstack([fill_traj[1] - fill_traj[0], dx,
-                   fill_traj[-1] - fill_traj[-2]])
+    dx = np.hstack([fill_traj[1] - fill_traj[0], dx, fill_traj[-1] - fill_traj[-2]])
     dxdt = dx / dt
     curve = CubicHermiteSpline(fill_times, fill_traj, dxdt)
     curve = PchipInterpolator(fill_times, fill_traj)
     step = (fill_indices[-1] - fill_indices[0]) / 80
     full_traj = curve(
-        np.arange(fill_indices[0], fill_indices[-1] +
-                  step, step=step, dtype=np.float32)
+        np.arange(fill_indices[0], fill_indices[-1] + step, step=step, dtype=np.float32)
     )
     return full_traj, curve
 
@@ -351,9 +337,7 @@ def interpolate_trajectory(fill_indices, traj):
     return full_traj, curve
 
 
-def compute_vector_field_from_coordinate(
-    goal, height, width, return_grid=True, eps=1e-6
-):
+def compute_vector_field_from_coordinate(goal, height, width, return_grid=True, eps=1e-6):
     """
     Compute the vector field from the coordinate in the image plane.
     Parameters
@@ -375,9 +359,7 @@ def compute_vector_field_from_coordinate(
     return vfield
 
 
-def transform_point_to_VFD(
-    point, depth, intr, downsample=1, depth_min=1e-3, depth_max=2
-):
+def transform_point_to_VFD(point, depth, intr, downsample=1, depth_min=1e-3, depth_max=2):
     """_summary_
 
     Parameters
@@ -422,8 +404,7 @@ def transform_point_to_VFD(
     vfield, grid = compute_vector_field_from_coordinate(uv, height, width)
     dfield = np.ones_like(depth) * d_ratio  # [0, 1]
     vfield = 0.5 * vfield + 0.5  # [0, 1]
-    vfd = np.stack([vfield[..., 0], vfield[..., 1], dfield],
-                   axis=-1)  # uvd, [0, 1]
+    vfd = np.stack([vfield[..., 0], vfield[..., 1], dfield], axis=-1)  # uvd, [0, 1]
     vfd = vfd.clip(0, 1)
     return vfd
 
@@ -510,9 +491,7 @@ def ransac_voting_layer(
 
     if len(pixels) > num_samples:
         if masks is None:
-            selected_idx = np.random.choice(
-                np.arange(len(pixels)), num_samples, replace=False
-            )
+            selected_idx = np.random.choice(np.arange(len(pixels)), num_samples, replace=False)
         else:
             valid_pixels = torch.nonzero(masks).squeeze(1)  # [N, ]
             selected_idx = np.random.choice(
@@ -533,10 +512,8 @@ def ransac_voting_layer(
     it = 0
     while True:
         # generate hypotheses
-        curr_hypotheses = generate_hypotheses(
-            pixels, vectors, num_hypothesis)  # [H, 2]
-        curr_hypotheses = curr_hypotheses[~torch.isnan(
-            curr_hypotheses.mean(axis=1))]
+        curr_hypotheses = generate_hypotheses(pixels, vectors, num_hypothesis)  # [H, 2]
+        curr_hypotheses = curr_hypotheses[~torch.isnan(curr_hypotheses.mean(axis=1))]
         if len(curr_hypotheses) == 0:
             continue
 
@@ -560,11 +537,7 @@ def ransac_voting_layer(
 
         if (1 - (1 - win_ratio**2) ** num_all_hypothesis) > confidence or it > max_iter:
             if verbose:
-                print(
-                    "Converged with inlier ratio {:.3f} at iter {}..".format(
-                        win_ratio, it - 1
-                    )
-                )
+                print("Converged with inlier ratio {:.3f} at iter {}..".format(win_ratio, it - 1))
             break
 
     mu, sigma = compute_final_center(win_hypotheses, win_votes, mode=mode)
@@ -608,10 +581,7 @@ def generate_hypotheses(pixels, vectors, num_hypothesis=100, eps=1e-5):
     l2 = torch.linalg.norm(vec2, dim=-1, keepdim=False)  # [H,]
 
     # compute dot product of the vectors
-    A = (
-        1 / (eps + (l1**2 * l2**2 -
-             torch.sum(vec1 * vec2, dim=-1) ** 2))[:, None]
-    )  # [H, 1]
+    A = 1 / (eps + (l1**2 * l2**2 - torch.sum(vec1 * vec2, dim=-1) ** 2))[:, None]  # [H, 1]
 
     M = torch.empty((num_hypothesis, 2, 2), device=pixels.device)  # [H, 2, 2]
     M[:, 0, 0] = l1.squeeze() ** 2
@@ -811,9 +781,7 @@ def encode_text_clip(
         default_context_length = 77
         context_length = max_length + 2
         assert context_length < default_context_length
-        texts = clip.tokenize(
-            raw_text, context_length=context_length, truncate=True
-        ).to(device)
+        texts = clip.tokenize(raw_text, context_length=context_length, truncate=True).to(device)
         zero_pad = torch.zeros(
             [texts.shape[0], default_context_length - context_length],
             dtype=texts.dtype,
@@ -906,18 +874,15 @@ def get_normal_clutters_in_batch(normals, masks=None, n_clusters=3):
             masks_i = masks_i.view(-1)  # [H*W]
             masks_i_np = masks_i.cpu().numpy()
             normals_i_np = normals_i_np[masks_i_np > 0]
-        kmeans_i = KMeans(n_clusters=n_clusters,
-                          random_state=0).fit(normals_i_np)
+        kmeans_i = KMeans(n_clusters=n_clusters, random_state=0).fit(normals_i_np)
         cluster_labels_i = kmeans_i.labels_
         cluster_centers_i = kmeans_i.cluster_centers_
         cluster_counts_i = np.bincount(cluster_labels_i)
         cluster_labels.append(cluster_labels_i)
         cluster_centers.append(cluster_centers_i)
         cluster_counts.append(cluster_counts_i)
-    cluster_labels = torch.tensor(cluster_labels).to(
-        normals.device)  # [B, H*W]
-    cluster_centers = torch.tensor(cluster_centers).to(
-        normals.device)  # [B, K, 3]
+    cluster_labels = torch.tensor(cluster_labels).to(normals.device)  # [B, H*W]
+    cluster_centers = torch.tensor(cluster_centers).to(normals.device)  # [B, K, 3]
     cluster_counts = torch.tensor(cluster_counts).to(normals.device)  # [B, K]
     cluster_top_id = torch.argmax(cluster_counts, dim=1)  # [B]
     cluster_top_normal = torch.gather(
@@ -934,24 +899,20 @@ def trimesh_to_o3d(mesh, scale=1.0, with_color=True):
     )
     # mesh_o3d.paint_uniform_color([255 / 255, 229 / 255, 180 / 255])
     if with_color:
-        mesh_o3d.vertex_colors = o3d.utility.Vector3dVector(
-            mesh.visual.vertex_colors[:, :3] / 255
-        )
+        mesh_o3d.vertex_colors = o3d.utility.Vector3dVector(mesh.visual.vertex_colors[:, :3] / 255)
     mesh_o3d.compute_vertex_normals()
     return mesh_o3d
 
 
 # Encoding: Convert text to a NumPy array of ASCII values
 def encode_text_list(text_list):
-    encoded_list = [np.array([ord(char) for char in word])
-                    for word in text_list]
+    encoded_list = [np.array([ord(char) for char in word]) for word in text_list]
     return encoded_list
 
 
 # Decoding: Convert NumPy array of ASCII values back to text
 def decode_text_list(encoded_list):
-    decoded_list = ["".join([chr(num) for num in word])
-                    for word in encoded_list]
+    decoded_list = ["".join([chr(num) for num in word]) for word in encoded_list]
     return decoded_list
 
 
@@ -986,8 +947,7 @@ def get_context_data_from_rgbd(
 
     data_batch = {}
     resize_scale = default_image_shape[0] / color_orig.shape[0]
-    color = cv2.resize(
-        color_orig, (default_image_shape[1], default_image_shape[0]))
+    color = cv2.resize(color_orig, (default_image_shape[1], default_image_shape[0]))
     depth = cv2.resize(
         depth_orig,
         (default_image_shape[1], default_image_shape[0]),
@@ -996,16 +956,12 @@ def get_context_data_from_rgbd(
     intr = intr_orig.copy()
     intr[:2] *= resize_scale
     inv_intr = np.linalg.inv(intr)
-    color = center_crop_image(
-        color, context_image_shape[0], context_image_shape[1])
-    depth = center_crop_image(
-        depth, context_image_shape[0], context_image_shape[1])
+    color = center_crop_image(color, context_image_shape[0], context_image_shape[1])
+    depth = center_crop_image(depth, context_image_shape[0], context_image_shape[1])
     vol_bnds = np.zeros((3, 2))
     view_frust_pts = get_view_frustum(depth_orig, intr_orig, np.eye(4))
-    vol_bnds[:, 0] = np.minimum(
-        vol_bnds[:, 0], np.amin(view_frust_pts, axis=1)).min()
-    vol_bnds[:, 1] = np.maximum(
-        vol_bnds[:, 1], np.amax(view_frust_pts, axis=1)).max()
+    vol_bnds[:, 0] = np.minimum(vol_bnds[:, 0], np.amin(view_frust_pts, axis=1)).min()
+    vol_bnds[:, 1] = np.maximum(vol_bnds[:, 1], np.amax(view_frust_pts, axis=1)).max()
     if tight_bounds:
         vol_bnds[:, 0] *= 1.1
         vol_bnds[:, 1] *= 0.9
@@ -1027,10 +983,12 @@ def get_context_data_from_rgbd(
     )
     if fine_voxel_resolution is not None:
         tsdf_fine = TSDFVolume(
-            vol_bnds, voxel_dim=fine_voxel_resolution, num_margin=fine_voxel_margin, unknown_free=False
+            vol_bnds,
+            voxel_dim=fine_voxel_resolution,
+            num_margin=fine_voxel_margin,
+            unknown_free=False,
         )
-        tsdf_fine.integrate(color_orig.copy(), depth_orig,
-                            intr_orig, np.eye(4))
+        tsdf_fine.integrate(color_orig.copy(), depth_orig, intr_orig, np.eye(4))
         tsdf_grid_fine = tsdf_fine.get_tsdf_volume()
         data_batch["tsdf_grid_fine"] = tsdf_grid_fine
         mesh = tsdf_fine.get_mesh()
@@ -1081,8 +1039,7 @@ def smooth_rotation_matrices(rotation_matrices, smooth_factor=0.1):
         # r1 = R.from_quat(quaternions[i - 1])
         # r2 = R.from_quat(quaternions[i])
         # import pdb; pdb.set_trace()
-        slerp = Slerp([0, 1], R.from_quat(
-            [quaternions[i - 1], quaternions[i]]))
+        slerp = Slerp([0, 1], R.from_quat([quaternions[i - 1], quaternions[i]]))
         t = np.linspace(0, 1, num=int(1 / smooth_factor))
         interp_quats = slerp(t).as_quat()
         interp_quats_mid = interp_quats[len(interp_quats) // 2]

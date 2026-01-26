@@ -14,28 +14,21 @@ from torch.nn.parameter import Parameter
 from torch.nn import Module
 from torch.nn import functional as F
 
-from models.layers_3d import RotaryPositionEncoding
-import models.clip.clip as clip
-from models.clip.model import ModifiedResNet
+from vidbot.models.layers_3d import RotaryPositionEncoding
+import vidbot.models.clip.clip as clip
+from vidbot.models.clip.model import ModifiedResNet
 import math
 from einops.layers.torch import Rearrange
 from torch.utils.checkpoint import checkpoint
 from torchvision.models import resnet50, ResNet50_Weights
 
 
- 
 def load_clip():
     clip_model, clip_transforms = clip.load("RN50")
     state_dict = clip_model.state_dict()
     layers = tuple(
         [
-            len(
-                set(
-                    k.split(".")[2]
-                    for k in state_dict
-                    if k.startswith(f"visual.layer{b}")
-                )
-            )
+            len(set(k.split(".")[2] for k in state_dict if k.startswith(f"visual.layer{b}")))
             for b in [1, 2, 3, 4]
         ]
     )
@@ -74,9 +67,7 @@ class Conv1dBlock(nn.Module):
         super().__init__()
 
         self.block = nn.Sequential(
-            nn.Conv1d(
-                inp_channels, out_channels, kernel_size, padding=kernel_size // 2
-            ),
+            nn.Conv1d(inp_channels, out_channels, kernel_size, padding=kernel_size // 2),
             Rearrange("batch channels horizon -> batch channels 1 horizon"),
             nn.GroupNorm(n_groups, out_channels),
             Rearrange("batch channels 1 horizon -> batch channels horizon"),
@@ -476,9 +467,7 @@ def multi_head_attention_forward(
 
         if in_proj_bias is not None:
             q = F.linear(query, q_proj_weight_non_opt, in_proj_bias[0:embed_dim])
-            k = F.linear(
-                key, k_proj_weight_non_opt, in_proj_bias[embed_dim : (embed_dim * 2)]
-            )
+            k = F.linear(key, k_proj_weight_non_opt, in_proj_bias[embed_dim : (embed_dim * 2)])
             v = F.linear(value, v_proj_weight_non_opt, in_proj_bias[(embed_dim * 2) :])
         else:
             q = F.linear(query, q_proj_weight_non_opt, in_proj_bias)
@@ -525,12 +514,8 @@ def multi_head_attention_forward(
         qp, kvp = rotary_pe
         q_cos, q_sin = qp[..., 0], qp[..., 1]
         k_cos, k_sin = kvp[..., 0], kvp[..., 1]
-        q = RotaryPositionEncoding.embed_rotary(
-            q.transpose(0, 1), q_cos, q_sin
-        ).transpose(0, 1)
-        k = RotaryPositionEncoding.embed_rotary(
-            k.transpose(0, 1), k_cos, k_sin
-        ).transpose(0, 1)
+        q = RotaryPositionEncoding.embed_rotary(q.transpose(0, 1), q_cos, q_sin).transpose(0, 1)
+        k = RotaryPositionEncoding.embed_rotary(k.transpose(0, 1), k_cos, k_sin).transpose(0, 1)
 
     q = q.contiguous().view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
     if k is not None:
@@ -559,18 +544,14 @@ def multi_head_attention_forward(
         k = torch.cat(
             [
                 k,
-                torch.zeros(
-                    (k.size(0), 1) + k.size()[2:], dtype=k.dtype, device=k.device
-                ),
+                torch.zeros((k.size(0), 1) + k.size()[2:], dtype=k.dtype, device=k.device),
             ],
             dim=1,
         )
         v = torch.cat(
             [
                 v,
-                torch.zeros(
-                    (v.size(0), 1) + v.size()[2:], dtype=v.dtype, device=v.device
-                ),
+                torch.zeros((v.size(0), 1) + v.size()[2:], dtype=v.dtype, device=v.device),
             ],
             dim=1,
         )
@@ -612,15 +593,11 @@ def multi_head_attention_forward(
             key_padding_mask.unsqueeze(1).unsqueeze(2),
             float("-inf"),
         )
-        attn_output_weights = attn_output_weights.view(
-            bsz * num_heads, tgt_len, src_len
-        )
+        attn_output_weights = attn_output_weights.view(bsz * num_heads, tgt_len, src_len)
 
     if slot_competition:
         attn_output_weights = F.softmax(attn_output_weights, dim=-2) + 1e-8
-        attn_output_weights = attn_output_weights / attn_output_weights.sum(
-            dim=-1, keepdim=True
-        )
+        attn_output_weights = attn_output_weights / attn_output_weights.sum(dim=-1, keepdim=True)
     else:
         attn_output_weights = F.softmax(attn_output_weights, dim=-1)
 
@@ -633,17 +610,9 @@ def multi_head_attention_forward(
     if (gate_attn is not None) and (k_mem is not None) and (v_mem is not None):
         k_mem = k_mem.permute((2, 0, 1))
         key_mem_len = k_mem.shape[0]
-        k_mem = (
-            k_mem.contiguous()
-            .view(key_mem_len, bsz * num_heads, head_dim)
-            .transpose(0, 1)
-        )
+        k_mem = k_mem.contiguous().view(key_mem_len, bsz * num_heads, head_dim).transpose(0, 1)
         v_mem = v_mem.permute((2, 0, 1))
-        v_mem = (
-            v_mem.contiguous()
-            .view(key_mem_len, bsz * num_heads, head_dim)
-            .transpose(0, 1)
-        )
+        v_mem = v_mem.contiguous().view(key_mem_len, bsz * num_heads, head_dim).transpose(0, 1)
         #         if True:
         #             k_mem = F.normalize(k_mem, dim = -1)
 
@@ -671,18 +640,14 @@ def multi_head_attention_forward(
         # gated learnable attention like memorizing transformers
         print("gate_attn ", torch.sigmoid(gate_attn))
         gate = torch.sigmoid(gate_attn).reshape(-1, 1, 1, 1)  # (n_head, 1, 1, 1)
-        attn_output_mem = attn_output_mem.view(
-            bsz, num_heads, tgt_len, head_dim
-        ).transpose(
+        attn_output_mem = attn_output_mem.view(bsz, num_heads, tgt_len, head_dim).transpose(
             0, 1
         )  # [num_heads, bsz, tgt_len, head_dim]
         attn_output = attn_output.view(bsz, num_heads, tgt_len, head_dim).transpose(
             0, 1
         )  # [num_heads, bsz, tgt_len, head_dim]
         attn_output = gate * attn_output_mem + (1.0 - gate) * attn_output
-        attn_output = attn_output.transpose(1, 0).view(
-            bsz * num_heads, tgt_len, head_dim
-        )
+        attn_output = attn_output.transpose(1, 0).view(bsz * num_heads, tgt_len, head_dim)
 
     attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
     attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
@@ -1021,9 +986,7 @@ class AdaLN(nn.Module):
 class RelativeCrossAttentionLayer(nn.Module):
     def __init__(self, embedding_dim, num_heads, dropout=0.0):
         super().__init__()
-        self.multihead_attn = MultiheadCustomAttention(
-            embedding_dim, num_heads, dropout=dropout
-        )
+        self.multihead_attn = MultiheadCustomAttention(embedding_dim, num_heads, dropout=dropout)
         self.norm = nn.LayerNorm(embedding_dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -1069,9 +1032,7 @@ class RelativeCrossAttentionModule(nn.Module):
         self.attn_layers = nn.ModuleList()
         self.ffw_layers = nn.ModuleList()
         for _ in range(num_layers):
-            self.attn_layers.append(
-                RelativeCrossAttentionLayer(embedding_dim, num_attn_heads)
-            )
+            self.attn_layers.append(RelativeCrossAttentionLayer(embedding_dim, num_attn_heads))
             self.ffw_layers.append(FeedforwardLayer(embedding_dim, embedding_dim))
 
     def forward(self, query, value, query_pos=None, value_pos=None):
@@ -1095,9 +1056,7 @@ class BackprojectDepth(nn.Module):
 
         meshgrid = np.meshgrid(range(self.width), range(self.height), indexing="xy")
         self.id_coords = np.stack(meshgrid, axis=0).astype(np.float32)
-        self.id_coords = nn.Parameter(
-            torch.from_numpy(self.id_coords), requires_grad=False
-        )
+        self.id_coords = nn.Parameter(torch.from_numpy(self.id_coords), requires_grad=False)
         self.pix_coords = torch.unsqueeze(
             torch.stack([self.id_coords[0].view(-1), self.id_coords[1].view(-1)], 0), 0
         )
@@ -1116,9 +1075,7 @@ class BackprojectDepth(nn.Module):
         pix_coords = torch.cat([pix_coords, ones], 1)  # [B, 3, H*W]
 
         cam_points = torch.matmul(inv_K, pix_coords)  # [B, 3, 3] @ [B, 3, H*W]
-        cam_points = (
-            depth.view(batch_size, 1, -1) * cam_points
-        )  # [B, 1, H*W] * [B, 3, H*W]
+        cam_points = depth.view(batch_size, 1, -1) * cam_points  # [B, 1, H*W] * [B, 3, H*W]
         return cam_points
 
 
@@ -1158,12 +1115,8 @@ class Project3D(nn.Module):
             -2
         )  # [B, N, 3] @ [B, 3, 3] + [B, 1, 3]
 
-        pix_coords = points_cam @ K.transpose(
-            -1, -2
-        )  # [B, N, 3] @ [B, 3, 3] => [B, N, 3]
-        pix_coords = pix_coords[..., :2] / (
-            pix_coords[..., 2:3] + self.eps
-        )  # [B, N, 2]
+        pix_coords = points_cam @ K.transpose(-1, -2)  # [B, N, 3] @ [B, 3, 3] => [B, N, 3]
+        pix_coords = pix_coords[..., :2] / (pix_coords[..., 2:3] + self.eps)  # [B, N, 2]
         pix_coords = pix_coords.permute(0, 2, 1)  # [B, 2, N]
         return pix_coords
 
@@ -1255,9 +1208,7 @@ def nonlinearity(x):
 
 
 def Normalize(in_channels):
-    return torch.nn.GroupNorm(
-        num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
-    )
+    return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
 
 
 class Upsample(nn.Module):
@@ -1314,9 +1265,7 @@ class ResnetBlock(nn.Module):
         self.checkpointing = False
 
         self.norm1 = Normalize(in_channels)
-        self.conv1 = torch.nn.Conv2d(
-            in_channels, out_channels, kernel_size=3, stride=1, padding=1
-        )
+        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         if temb_channels > 0:
             self.temb_proj = torch.nn.Linear(temb_channels, out_channels)
         self.norm2 = Normalize(out_channels)
@@ -1370,15 +1319,9 @@ class AttnBlock(nn.Module):
         self.in_channels = in_channels
 
         self.norm = Normalize(in_channels)
-        self.q = torch.nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, padding=0
-        )
-        self.k = torch.nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, padding=0
-        )
-        self.v = torch.nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, padding=0
-        )
+        self.q = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.k = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.v = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
         self.proj_out = torch.nn.Conv2d(
             in_channels, in_channels, kernel_size=1, stride=1, padding=0
         )
@@ -1437,9 +1380,7 @@ class Encoder(nn.Module):
         self.h, self.w = resolution[0], resolution[1]
 
         # downsampling
-        self.conv_in = torch.nn.Conv2d(
-            in_channels, self.ch, kernel_size=3, stride=1, padding=1
-        )
+        self.conv_in = torch.nn.Conv2d(in_channels, self.ch, kernel_size=3, stride=1, padding=1)
 
         curr_res = self.h
         in_ch_mult = (1,) + tuple(ch_mult)
@@ -1557,9 +1498,7 @@ class Decoder(nn.Module):
         curr_res_w = self.w // 2 ** (self.num_resolutions - 1)
         self.z_shape = (1, z_channels, curr_res_h, curr_res_w)
         # z to block_in
-        self.conv_in = torch.nn.Conv2d(
-            z_channels, block_in, kernel_size=3, stride=1, padding=1
-        )
+        self.conv_in = torch.nn.Conv2d(z_channels, block_in, kernel_size=3, stride=1, padding=1)
 
         # middle
         self.mid = nn.Module()
@@ -1606,9 +1545,7 @@ class Decoder(nn.Module):
 
         # end
         self.norm_out = Normalize(block_in)
-        self.conv_out = torch.nn.Conv2d(
-            block_in, out_ch, kernel_size=3, stride=1, padding=1
-        )
+        self.conv_out = torch.nn.Conv2d(block_in, out_ch, kernel_size=3, stride=1, padding=1)
 
     def forward(self, z):
         # assert z.shape[1:] == self.z_shape[1:]
@@ -1677,9 +1614,7 @@ class Up(nn.Module):
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
         else:
-            self.up = nn.ConvTranspose2d(
-                in_channels, in_channels // 2, kernel_size=2, stride=2
-            )
+            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
             self.conv = DoubleConv(in_channels, out_channels)
 
     def forward(self, x1, x2=None):
@@ -1698,9 +1633,7 @@ class Up(nn.Module):
             diffY = x2.size()[2] - x1.size()[2]
             diffX = x2.size()[3] - x1.size()[3]
 
-            x1 = F.pad(
-                x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2]
-            )
+            x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
             # if you have padding issues, see
             # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
             # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
@@ -1711,9 +1644,7 @@ class Up(nn.Module):
 
 
 class ConvBlock(nn.Module):
-    def __init__(
-        self, in_planes, filters, kernel_size, stride=1, final_relu=True, batchnorm=True
-    ):
+    def __init__(self, in_planes, filters, kernel_size, stride=1, final_relu=True, batchnorm=True):
         super(ConvBlock, self).__init__()
         self.final_relu = final_relu
         self.batchnorm = batchnorm
@@ -1813,7 +1744,7 @@ class ResNet50Decoder(nn.Module):
         self.bottleneck_feature_key = bottleneck_feature_key
         self.use_skip = use_skip
         self.latent_dim = ResNet50Decoder.FeatureKey2Channels[bottleneck_feature_key]
- 
+
         up_blocks = []
         up_blocks.append(Up(self.latent_dim, 1024))
         up_blocks.append(Up(1024, 512))
@@ -1888,9 +1819,9 @@ class PositionalEmbeddingV2(nn.Module):
         pe.require_grad = False
 
         position = torch.arange(0, max_len).float().unsqueeze(1)  # (N,1)
-        div_term = (
-            torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model)
-        ).exp()[None]
+        div_term = (torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model)).exp()[
+            None
+        ]
 
         pe[:, 0::2] = torch.sin(position * div_term)  # (N, d_model/2)
         pe[:, 1::2] = torch.cos(position * div_term)
