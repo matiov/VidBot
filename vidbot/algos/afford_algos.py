@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from vidbot.algos.contact_algos import ContactPredictorModule
 from vidbot.algos.goal_algos import GoalPredictorModule
 from vidbot.algos.traj_algos import TrajectoryDiffusionModule
-import diffuser_utils.dataset_utils as DatasetUtils
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
 from torchvision.ops import box_convert
 import open3d as o3d  # type: ignore
 import cv2
