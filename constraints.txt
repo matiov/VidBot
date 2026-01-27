@@ -1,0 +1,18 @@
+# ---- CUDA / Torch (DO NOT TOUCH) ----
+torch==1.13.1+cu117
+torchvision==0.14.1+cu117
+torchaudio==0.13.1+cu117
+
+# ---- Numeric ABI (locked) ----
+numpy==1.23.5
+scipy==1.9.3
+
+# ---- Lightning 1.8.x compatible ----
+pytorch-lightning==1.8.6
+lightning-lite==1.8.6
+lightning-utilities==0.3.0
+torchmetrics==0.11.4
+
+# ---- Safety pins ----
+setuptools<81
+packaging<24
