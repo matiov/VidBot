@@ -11,7 +11,7 @@ goal_ckpt: ./pretrained/goal/final.ckpt
 contact_ckpt: ./pretrained/contact/final.ckpt
 
 # Optional: Open-world Detectors and Grasp Detector
-config_detector: ./third_party/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py
-esam_ckpt: ./third_party/EfficientSAM/weights/efficient_sam_vitt.pt
-graspnet_ckpt: ./third_party/graspness_unofficial/weights/minkuresunet_kinect.tar
-detector_ckpt: ./third_party/GroundingDINO/weights/groundingdino_swint_ogc.pth
+config_detector: /opt/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py
+esam_ckpt: /opt/EfficientSAM/weights/efficient_sam_vitt.pt
+graspnet_ckpt: /opt/graspness_unofficial/weights/minkuresunet_kinect.tar
+detector_ckpt: /opt/GroundingDINO/weights/groundingdino_swint_ogc.pth

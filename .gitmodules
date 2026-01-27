@@ -1,12 +1,12 @@
-[submodule "third_party/GroundingDINO"]
-	path = third_party/GroundingDINO
+[submodule "/opt/GroundingDINO"]
+	path = /opt/GroundingDINO
 	url = https://github.com/IDEA-Research/GroundingDINO.git
-[submodule "third_party/EfficientSAM"]
-	path = third_party/EfficientSAM
+[submodule "/opt/EfficientSAM"]
+	path = /opt/EfficientSAM
 	url = https://github.com/yformer/EfficientSAM.git
-[submodule "third_party/graspnetAPI"]
-	path = third_party/graspnetAPI
+[submodule "/opt/graspnetAPI"]
+	path = /opt/graspnetAPI
 	url = git@github.com:HanzhiC/graspnetAPI.git
-[submodule "third_party/graspness_unofficial"]
-	path = third_party/graspness_unofficial
+[submodule "/opt/graspness_unofficial"]
+	path = /opt/graspness_unofficial
 	url = https://github.com/HanzhiC/graspness_unofficial.git

@@ -18,9 +18,9 @@ from scipy.signal import savgol_filter
 from transformations import rotation_matrix
 from copy import deepcopy
 
-sys.path.append("./third_party/EfficientSAM")
-sys.path.append("./third_party/GroundingDINO")
-sys.path.append("./third_party/graspness_unofficial")
+sys.path.append("/opt/EfficientSAM")
+sys.path.append("/opt/GroundingDINO")
+sys.path.append("/opt/graspness_unofficial")
 
 
 class AffordanceInferenceEngine(pl.LightningModule):
@@ -33,10 +33,10 @@ class AffordanceInferenceEngine(pl.LightningModule):
         use_detector=False,
         use_esam=False,
         use_graspnet=False,
-        detector_config="./third_party/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
-        detector_ckpt="./third_party/GroundingDINO/weights/groundingdino_swint_ogc.pth",
-        esam_ckpt="./third_party/EfficientSAM/weights/efficient_sam_vitt.pt",
-        graspnet_ckpt="./third_party/graspness_unofficial/weights/minkuresunet_kinect.tar",
+        detector_config="/opt/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+        detector_ckpt="/opt/GroundingDINO/weights/groundingdino_swint_ogc.pth",
+        esam_ckpt="/opt/EfficientSAM/weights/efficient_sam_vitt.pt",
+        graspnet_ckpt="/opt/graspness_unofficial/weights/minkuresunet_kinect.tar",
     ):
         super(AffordanceInferenceEngine, self).__init__()
 
