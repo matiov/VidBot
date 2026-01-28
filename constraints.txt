@@ -4,7 +4,6 @@ torchvision==0.14.1+cu117
 torchaudio==0.13.1+cu117
 
 # ---- Numeric ABI (locked) ----
-numpy>=1.23,<1.27
 scipy>=1.10,<1.12
 
 # ---- Lightning 1.8.x compatible ----
