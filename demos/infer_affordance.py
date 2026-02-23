@@ -66,7 +66,6 @@ def main(args):
     normal_weight = guidance_params["normal_weight"]
     contact_weight = guidance_params["contact_weight"]
     fine_voxel_resolution = guidance_params["fine_voxel_resolution"]
-    exclude_object_points = guidance_params["exclude_object_points"]
     print("Using guidance params: ", guidance_params)
 
     # Read the data
@@ -117,7 +116,6 @@ def main(args):
         contact_weight=contact_weight,
         normal_weight=normal_weight,
         scale=calib_scale,
-        exclude_object_points=exclude_object_points,
         valid_horizon=-1,
     )
 
