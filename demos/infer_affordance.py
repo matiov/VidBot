@@ -57,7 +57,7 @@ def main(args):
                 action
             )
         )
-        guidance_params = GUIDANCE_PARAMS_DICT["other"]
+        pass
     else:
         guidance_params = GUIDANCE_PARAMS_DICT[action]
 
