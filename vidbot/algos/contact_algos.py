@@ -7,10 +7,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torchvision
 
-
 import vidbot.diffuser_utils.dataset_utils as DatasetUtils
 from vidbot.models.contactformer import ContactFormer
-from models.clip import clip, tokenize
+from vidbot.models.clip import clip, tokenize
 
 # CLIP-based action text encoder
 VLM, VLM_TRANSFORM = clip.load("ViT-B/16", jit=False)
