@@ -24,7 +24,6 @@ commands=(
     "python demos/infer_affordance.py -v -f 3 -i 'take kettle' --load_results --no_save $graspnet_option"
     "python demos/infer_affordance.py -v -f 4 -i 'take paper' --load_results --no_save $graspnet_option"
     "python demos/infer_affordance.py -v -f 5 -i 'pickup bottle' --load_results --no_save $graspnet_option"
-    "python demos/infer_affordance.py -v -f 6 -i 'push door' --load_results --no_save $graspnet_option"
     "python demos/infer_affordance.py -v -f 7 -i 'open cabinet' --load_results --no_save $graspnet_option"
     "python demos/infer_affordance.py -v -f 8 -i 'close cabinet' --load_results --no_save $graspnet_option"
     "python demos/infer_affordance.py -v -f 9 -i 'pickup driller' --load_results --no_save $graspnet_option"
