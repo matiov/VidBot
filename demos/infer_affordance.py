@@ -126,11 +126,6 @@ def main(args):
         traj_guidance=diffuser_guidance,
         use_detector=use_detector,
         use_esam=use_esam,
-        use_graspnet=args.use_graspnet,
-        detector_config=config.config_detector,
-        detector_ckpt=config.detector_ckpt,
-        esam_ckpt=config.esam_ckpt,
-        graspnet_ckpt=config.graspnet_ckpt,
     )
 
     for k, v in data_batch.items():
