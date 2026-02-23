@@ -61,7 +61,9 @@ class TrajectoryDiffusionModule(pl.LightningModule):
             self.reset_parameters()
 
         if "action_label_path" in algo_config.training:
-            self.action_annotations = pd.read_csv(algo_config.training.action_label_path)
+            self.action_annotations = pd.read_csv(
+                "/opt/vidbot/assets/EPIC_train_action_labels.csv"
+            )
         else:
             self.action_annotations = None
 
