@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+from torchvision.ops import roi_align, roi_pool
 
 from vidbot.models.gpt import GPT, GPTConfig
 from vidbot.models.layers_2d import Decoder, Encoder
