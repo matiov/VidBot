@@ -1,23 +1,16 @@
-import pytorch_lightning as pl
 import einops
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import tqdm
-import numpy as np
-from vidbot.models.layers_2d import Decoder, Encoder
-from vidbot.models.helpers import FocalLoss
-from vidbot.models.clip import clip, tokenize
-
-import torchvision.models as models
 import torchvision.transforms as transforms
-from torchvision.ops import roi_align, roi_pool
-from copy import deepcopy
-from vidbot.models.layers_2d import load_clip
-from vidbot.models.perceiver import FeaturePerceiver
+
+from vidbot.models.gpt import GPT, GPTConfig
+from vidbot.models.layers_2d import Decoder, Encoder
+from vidbot.models.preceiver import FeaturePreceiver
 
 
-class GoalPredictor(pl.LightningModule):
+class GoalFormer(pl.LightningModule):
     def __init__(
         self,
         in_channels=4,
@@ -98,11 +91,9 @@ class GoalPredictor(pl.LightningModule):
             self.object_encode_module = nn.Linear(obj_dim, self.visual_feature_dim)
 
         if self.encode_action:
-
             self.action_encode_module = nn.Linear(self.visual_feature_dim, self.visual_feature_dim)
 
         if self.encode_bbox:
-
             self.bbox_encode_module = nn.Linear(4, bbox_feature_dim)
 
         fuser_dim = 0
@@ -114,8 +105,7 @@ class GoalPredictor(pl.LightningModule):
             fuser_dim += self.bbox_feature_dim
 
         if self.encode_action or self.encode_object or self.encode_bbox:
-
-            self.fuser = FeaturePerceiver(
+            self.fuser = FeaturePreceiver(
                 transition_dim=self.visual_feature_dim,
                 condition_dim=fuser_dim,
                 time_emb_dim=0,
@@ -125,7 +115,7 @@ class GoalPredictor(pl.LightningModule):
         else:
             self.fuser = None
 
-        self.depth_fuser = FeaturePerceiver(
+        self.depth_fuser = FeaturePreceiver(
             transition_dim=self.visual_feature_dim,
             condition_dim=self.visual_feature_dim,
             time_emb_dim=0,  # No time embedding
@@ -182,7 +172,6 @@ class GoalPredictor(pl.LightningModule):
         condition_feature = []
         if self.encode_object:
             if self.object_encode_mode == "vlm":
-
                 print("... Try another way to encode object")
             elif self.object_encode_mode in ["roi_pool", "roi_align"]:
                 roi_res = 6
@@ -207,14 +196,11 @@ class GoalPredictor(pl.LightningModule):
                     "Object encode mode {} not implemented".format(self.object_encode_mode)
                 )
             object_feature = self.object_encode_module(object_feature)
-
             condition_feature.append(object_feature)
 
         if self.encode_action:
-
             action_feature = data_batch["action_feature"][:, None]
             action_feature = self.action_encode_module(action_feature)  # [B, 1, c]
-
             condition_feature.append(action_feature)
 
         if self.encode_bbox:
@@ -222,7 +208,6 @@ class GoalPredictor(pl.LightningModule):
             bbox_norm[:, [0, 2]] = bbox_norm[:, [0, 2]] / inputs.shape[-1]
             bbox_norm[:, [1, 3]] = bbox_norm[:, [1, 3]] / inputs.shape[-2]
             bbox_feature = self.bbox_encode_module(bbox_norm)  # [B, 64]
-
             bbox_feature = bbox_feature[:, None]  # [B, 1, 64]
             condition_feature.append(bbox_feature)
 
@@ -249,7 +234,6 @@ class GoalPredictor(pl.LightningModule):
         if pred is not None:
             pred_vf, pred_dres, pred_heatmap = pred[:, :2], pred_depth, pred[:, -1:]
             pred_vf = F.normalize(pred_vf, p=2, dim=1)  # [-1, 1]
-            pred_vf = pred_vf.clamp(-1, 1)
             if "d_res_scale" in data_batch:
                 print(
                     "... Rescale the depth with d_res_scale: ",
@@ -259,6 +243,94 @@ class GoalPredictor(pl.LightningModule):
             pred_d_final = start_pos_depth - pred_dres  # [B, 1, H, W]
             pred = torch.cat([pred_vf, pred_d_final, pred_heatmap], dim=1)  # [B, 4, H, W]
 
+        if target_key == "vfd":
+            assert (
+                pred[:, :2].min() >= -1 and pred[:, :2].max() <= 1
+            ), "VF output should be in the range [-1, 1]"
+
         outputs = {"pred": pred}
 
         return outputs
+
+    def compute_losses(self, data_batch, training=True, return_rec=False):
+        losses = {}
+        total_loss = 0
+        outputs = self.forward(data_batch, training=training)
+
+        pred = outputs["pred"]
+        pred[:, :2] = (pred[:, :2] + 1) / 2  # [-1, 1] => [0, 1]
+        pred_vfd, pred_heatmap = pred[:, :3], pred[:, -1]
+
+        targ_vfd = data_batch["vfd"]
+        targ_heatmap = data_batch["goal_heatmap"]
+
+        offset_loss = F.mse_loss(pred_vfd, targ_vfd, reduction="none")
+        vf_offset_loss = offset_loss[:, :2].mean()
+        d_offset_loss = offset_loss[:, 2].mean()
+
+        total_loss += vf_offset_loss * 10 + d_offset_loss * 10
+
+        heatmap_loss = F.binary_cross_entropy_with_logits(pred_heatmap, targ_heatmap)
+        total_loss += heatmap_loss
+
+        losses["vf_offset_loss"] = vf_offset_loss
+        losses["d_offset_loss"] = d_offset_loss
+        losses["heatmap_loss"] = heatmap_loss
+
+        losses["total_loss"] = total_loss
+        return losses
+
+
+if __name__ == "__main__":
+
+    from easydict import EasyDict as edict
+
+    # # Define the configuration for the GPT
+    gpt_config = {
+        "block_size": 768,
+        "input_dim": 512,
+        "output_dim": 512,
+        "n_layer": 12,
+        "n_head": 12,
+        "n_embd": 768,
+        "dropout": 0.1,
+    }
+
+    gpt_config = edict(gpt_config)
+    # rqvae_config = edict(rqvae_config)
+    gpt = GPT(GPTConfig(**gpt_config))
+    # rqvae = RQVAE(**rqvae_config)
+    goalformer = GoalFormer(
+        # gpt,
+        # rqvae,
+        # clip_model="RN50",
+        encode_bbox=True,
+        encode_object=True,
+        encode_action=True,
+        object_encode_mode="roi_pool",
+    ).cuda()
+    image = torch.randn(1, 3, 256, 448).cuda()
+    vfd = torch.rand(1, 3, 256, 448).cuda()
+    data_batch = {
+        "color": image,
+        "depth": torch.rand(1, 256, 448).cuda(),
+        "vfd": vfd,
+        "bbox": torch.zeros(1, 4).cuda(),
+        "object_color": torch.rand(1, 3, 256, 256).cuda(),
+        "action_tokens": torch.rand(1, 77).long().cuda(),
+        "action_feature": torch.rand(1, 512).cuda(),
+        "verb_feature": torch.rand(1, 512).cuda(),
+        "start_pos_depth": torch.rand(1, 256, 448).cuda(),
+        "end_pos_depth": torch.rand(1, 256, 448).cuda(),
+    }
+
+    import time
+
+    with torch.no_grad():
+        for _ in range(10):
+            time_begin = time.time()
+            out = goalformer(data_batch, training=False)
+            print("Time: ", time.time() - time_begin)
+
+    for k, v in out.items():
+        print(k, v.shape)

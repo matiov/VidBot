@@ -1,24 +1,22 @@
-import numpy as np
 import copy
 
+import numpy as np
+import open3d as o3d
+import pandas as pd
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import pytorch_lightning as pl
-import torch.nn.functional as F
-import diffuser_utils.dataset_utils as DatasetUtils
-import diffuser_utils.tensor_utils as TensorUtils
-from models.diffuser import DiffuserModel
-from models.helpers import EMA
-import open3d as o3d
-import time
-import cv2
 import torchvision
-from models.clip import clip, tokenize
-import pandas as pd
+
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+import vidbot.diffuser_utils.tensor_utils as TensorUtils
+from vidbot.models.diffuser import DiffuserModel
+from vidbot.models.helpers import EMA
+from vidbot.models.clip import clip, tokenize
 
 
-GRIPPER = o3d.io.read_triangle_mesh("assets/panda_hand_mesh.obj")
+GRIPPER = o3d.io.read_triangle_mesh("/opt/vidbot/assets/panda_hand_mesh.obj")
 VLM, VLM_TRANSFORM = clip.load("ViT-B/16", jit=False)
 VLM.eval()
 for p in VLM.parameters():
@@ -63,9 +61,7 @@ class TrajectoryDiffusionModule(pl.LightningModule):
             self.reset_parameters()
 
         if "action_label_path" in algo_config.training:
-            self.action_annotations = pd.read_csv(
-                algo_config.training.action_label_path
-            )
+            self.action_annotations = pd.read_csv(algo_config.training.action_label_path)
         else:
             self.action_annotations = None
 
@@ -103,9 +99,6 @@ class TrajectoryDiffusionModule(pl.LightningModule):
             action_feature = clip_model.encode_text(action_tokens.clone())
 
         else:
-            # action_text = data_batch["action_text"]
-            # action_tokens = tokenize(action_text).to(self.device)
-            # action_feature = VLM.encode_text(action_tokens.clone())
             action_tokens, action_feature = DatasetUtils.encode_text_clip(
                 clip_model,
                 [data_batch["action_text"]],
@@ -169,13 +162,9 @@ class TrajectoryDiffusionModule(pl.LightningModule):
         action_tokens_null = action_tokens_null.repeat(batch_size, 1)
         action_tokens_null = action_tokens_null.to(data_batch["action_tokens"].device)
 
-        drop_mask_obj = (
-            torch.rand(len(data_batch["object_color"])) < self.cond_drop_obj_p
-        )
+        drop_mask_obj = torch.rand(len(data_batch["object_color"])) < self.cond_drop_obj_p
         drop_mask_map = torch.rand(len(data_batch["color"])) < self.cond_drop_map_p
-        drop_mask_act = (
-            torch.rand(len(data_batch["action_tokens"])) < self.cond_drop_act_p
-        )
+        drop_mask_act = torch.rand(len(data_batch["action_tokens"])) < self.cond_drop_act_p
         drop_mask_goal = torch.rand(len(data_batch["end_pos"])) < self.cond_drop_goal_p
 
         data_batch["object_color"][drop_mask_obj] = self.cond_fill_val
@@ -234,9 +223,7 @@ class TrajectoryDiffusionModule(pl.LightningModule):
         data_batch.update({"pred_trajectories": pred_trajs})
 
         if "predictions_rot" in out:
-            data_batch.update(
-                {"pred_trajectories_rot": out["predictions_rot"]}
-            )  # [B, N, H, 3, 3]
+            data_batch.update({"pred_trajectories_rot": out["predictions_rot"]})  # [B, N, H, 3, 3]
 
         self.visualize_trajectory(
             data_batch, config_path=self.train_config.validation.render_config
@@ -269,18 +256,14 @@ class TrajectoryDiffusionModule(pl.LightningModule):
                 )
             )
 
-    def visualize_trajectory_by_drawing(
-        self, data_batch, config_path, window=False, **kwargs
-    ):
+    def visualize_trajectory_by_drawing(self, data_batch, config_path, window=False, **kwargs):
         batch_size = len(data_batch["color"])
         results_gt, results_pred = [], []
         for i in range(batch_size):
             color = data_batch["color"][i].cpu().numpy().transpose(1, 2, 0)
             intr = data_batch["intrinsics"][i].cpu().numpy()
             gt_traj = data_batch["gt_trajectory"][i].cpu().numpy()
-            vis_gt = np.ascontiguousarray(color * 255, dtype=np.uint8)[
-                :, :, ::-1
-            ].copy()
+            vis_gt = np.ascontiguousarray(color * 255, dtype=np.uint8)[:, :, ::-1].copy()
             vis_gt = DatasetUtils.visualize_2d_trajectory(
                 vis_gt, gt_traj, intr, cmap_name="viridis", **kwargs
             )
@@ -288,18 +271,16 @@ class TrajectoryDiffusionModule(pl.LightningModule):
             results_gt.append(vis_gt)
             if self.action_annotations is not None:
                 uid_i = data_batch["uid"][i].item()
-                narration_i = self.action_annotations[
-                    self.action_annotations["uid"] == uid_i
-                ]["narration"].values[0]
+                narration_i = self.action_annotations[self.action_annotations["uid"] == uid_i][
+                    "narration"
+                ].values[0]
             else:
                 narration_i = ""
             if "pred_trajectories" in data_batch:
                 print("===> Visualizing pred trajectories")
                 pred_trajs = data_batch["pred_trajectories"][i].cpu().numpy()
                 pred_traj_colors = DatasetUtils.random_colors(len(pred_trajs))
-                vis_pred = np.ascontiguousarray(color * 255, dtype=np.uint8)[
-                    :, :, ::-1
-                ].copy()
+                vis_pred = np.ascontiguousarray(color * 255, dtype=np.uint8)[:, :, ::-1].copy()
                 traj_color = None
                 for pi, pred_traj in enumerate(pred_trajs):
                     if len(pred_trajs) > 1:
@@ -386,8 +367,7 @@ class TrajectoryDiffusionModule(pl.LightningModule):
                     )
                     if len(pred_trajs) > 1:
                         _pred_traj_vis = [
-                            s.paint_uniform_color(pred_traj_colors[pi])
-                            for s in _pred_traj_vis
+                            s.paint_uniform_color(pred_traj_colors[pi]) for s in _pred_traj_vis
                         ]
 
                     pred_traj_vis = _pred_traj_vis[0]
@@ -400,21 +380,13 @@ class TrajectoryDiffusionModule(pl.LightningModule):
                 print("===> Visualizing pred trajectories")
                 vis_id = 0
                 if "guide_losses" in data_batch:
-                    pred_trajs_loss = data_batch["guide_losses"]["total_loss"].detach()[
-                        i
-                    ]  # [N]
+                    pred_trajs_loss = data_batch["guide_losses"]["total_loss"].detach()[i]  # [N]
                     vis_id = torch.argmin(pred_trajs_loss).item()
 
                 pred_trajs_rot = (
-                    data_batch["pred_trajectories_rot"][i]
-                    .cpu()
-                    .numpy()[vis_id : vis_id + 1]
+                    data_batch["pred_trajectories_rot"][i].cpu().numpy()[vis_id : vis_id + 1]
                 )
-                pred_trajs = (
-                    data_batch["pred_trajectories"][i]
-                    .cpu()
-                    .numpy()[vis_id : vis_id + 1]
-                )
+                pred_trajs = data_batch["pred_trajectories"][i].cpu().numpy()[vis_id : vis_id + 1]
                 for pi, pred_traj_rot in enumerate(pred_trajs_rot):
                     pred_traj_tra = pred_trajs[pi]
                     gripper_colors = DatasetUtils.get_heatmap(
@@ -427,18 +399,10 @@ class TrajectoryDiffusionModule(pl.LightningModule):
                             wT = np.eye(4)
                             wT[:3, 3] = wp
                             wT[:3, :3] = wr
-                            # gripper_i = copy.deepcopy(GRIPPER)
-                            # gripper_i.translate(
-                            #     [0, 0, -0.12]
-                            # )  # Waypoint is the contact point
-                            # # gripper_i.scale(0.8, [0, 0, 0])
-                            gripper_i = (
-                                o3d.geometry.TriangleMesh.create_coordinate_frame(
-                                    size=0.1, origin=[0, 0, 0]
-                                )
+                            gripper_i = o3d.geometry.TriangleMesh.create_coordinate_frame(
+                                size=0.1, origin=[0, 0, 0]
                             )
                             gripper_i.transform(wT)
-                            # gripper_i.paint_uniform_color(gripper_colors[wi])
                             gripper_vis.append(gripper_i)
 
                     gripper_vis_final = gripper_vis[0]

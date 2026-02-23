@@ -1,17 +1,17 @@
+from functools import partial
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_scatter import scatter_mean
-from functools import partial
-import math
+
 
 # -----------------------------------------------------------------------------#
 # ---------------------------------- PosEnc -----------------------------------#
 # -----------------------------------------------------------------------------#
 
 
-
-    
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -26,6 +26,7 @@ class SinusoidalPosEmb(nn.Module):
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
         return emb
 
+
 class RotaryPositionEncoding(nn.Module):
     def __init__(self, feature_dim, pe_type="Rotary1D"):
         super().__init__()
@@ -35,18 +36,14 @@ class RotaryPositionEncoding(nn.Module):
 
     @staticmethod
     def embed_rotary(x, cos, sin):
-        x2 = (
-            torch.stack([-x[..., 1::2], x[..., ::2]], dim=-1).reshape_as(x).contiguous()
-        )
+        x2 = torch.stack([-x[..., 1::2], x[..., ::2]], dim=-1).reshape_as(x).contiguous()
         x = x * cos + x2 * sin
         return x
 
     def forward(self, x_position):
         bsize, npoint = x_position.shape
         div_term = torch.exp(
-            torch.arange(
-                0, self.feature_dim, 2, dtype=torch.float, device=x_position.device
-            )
+            torch.arange(0, self.feature_dim, 2, dtype=torch.float, device=x_position.device)
             * (-math.log(10000.0) / (self.feature_dim))
         )
         div_term = div_term.view(1, 1, -1)  # [1, 1, d]
@@ -80,9 +77,7 @@ class RotaryPositionEncoding3D(RotaryPositionEncoding):
         bsize, npoint, _ = XYZ.shape
         x_position, y_position, z_position = XYZ[..., 0:1], XYZ[..., 1:2], XYZ[..., 2:3]
         div_term = torch.exp(
-            torch.arange(
-                0, self.feature_dim // 3, 2, dtype=torch.float, device=XYZ.device
-            )
+            torch.arange(0, self.feature_dim // 3, 2, dtype=torch.float, device=XYZ.device)
             * (-math.log(10000.0) / (self.feature_dim // 3))
         )
         div_term = div_term.view(1, 1, -1)  # [1, 1, d//6]
@@ -253,18 +248,14 @@ def create_conv(in_channels, out_channels, kernel_size, order, num_groups, paddi
         list of tuple (name, module)
     """
     assert "c" in order, "Conv layer MUST be present"
-    assert (
-        order[0] not in "rle"
-    ), "Non-linearity cannot be the first operation in the layer"
+    assert order[0] not in "rle", "Non-linearity cannot be the first operation in the layer"
 
     modules = []
     for i, char in enumerate(order):
         if char == "r":
             modules.append(("ReLU", nn.ReLU(inplace=True)))
         elif char == "l":
-            modules.append(
-                ("LeakyReLU", nn.LeakyReLU(negative_slope=0.1, inplace=True))
-            )
+            modules.append(("LeakyReLU", nn.LeakyReLU(negative_slope=0.1, inplace=True)))
         elif char == "e":
             modules.append(("ELU", nn.ELU(inplace=True)))
         elif char == "c":
@@ -273,9 +264,7 @@ def create_conv(in_channels, out_channels, kernel_size, order, num_groups, paddi
             modules.append(
                 (
                     "conv",
-                    conv3d(
-                        in_channels, out_channels, kernel_size, bias, padding=padding
-                    ),
+                    conv3d(in_channels, out_channels, kernel_size, bias, padding=padding),
                 )
             )
         elif char == "g":
@@ -393,16 +382,12 @@ class DoubleConv(nn.Sequential):
         # conv1
         self.add_module(
             "SingleConv1",
-            SingleConv(
-                conv1_in_channels, conv1_out_channels, kernel_size, order, num_groups
-            ),
+            SingleConv(conv1_in_channels, conv1_out_channels, kernel_size, order, num_groups),
         )
         # conv2
         self.add_module(
             "SingleConv2",
-            SingleConv(
-                conv2_in_channels, conv2_out_channels, kernel_size, order, num_groups
-            ),
+            SingleConv(conv2_in_channels, conv2_out_channels, kernel_size, order, num_groups),
         )
 
 
@@ -683,9 +668,7 @@ class FinalConv(nn.Sequential):
         num_groups (int): number of groups for the GroupNorm
     """
 
-    def __init__(
-        self, in_channels, out_channels, kernel_size=3, order="crg", num_groups=8
-    ):
+    def __init__(self, in_channels, out_channels, kernel_size=3, order="crg", num_groups=8):
         super(FinalConv, self).__init__()
 
         # conv1
@@ -918,9 +901,7 @@ class VoxelGridEncoder(nn.Module):
 
         self.conv_in = nn.Conv3d(1, c_dim, kernel_size, padding=1)
         self.tsdf_conv_out = nn.Conv3d(c_dim, c_dim, kernel_size, padding=1)
-        unet3d_kwargs.update(
-            {"in_channels": c_dim, "out_channels": c_dim, "f_maps": c_dim}
-        )
+        unet3d_kwargs.update({"in_channels": c_dim, "out_channels": c_dim, "f_maps": c_dim})
 
         self.unet3d = UNet3D(**unet3d_kwargs)
         self.c_dim = c_dim

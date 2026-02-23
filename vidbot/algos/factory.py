@@ -1,24 +1,10 @@
 """Factory methods for creating models"""
 
-from algos.traj_algos import (
-    TrajectoryDiffusionModule,
-)
-
-from algos.traj_rot_algos import (
-    TrajectoryRotationDiffusionModule,
-)
-
-from algos.vq_algos import (
-    GoalVectorQuantizationModule,
-)
-
-from algos.goal_algos import (
-    GoalFormerModule,
-)
-
-from algos.contact_algos import (
-    ContactFormerModule,
-)
+from vidbot.algos.contact_algos import ContactFormerModule
+from vidbot.algos.goal_algos import GoalFormerModule
+from vidbot.algos.traj_algos import TrajectoryDiffusionModule
+from vidbot.algos.traj_rot_algos import TrajectoryRotationDiffusionModule
+from vidbot.algos.vq_algos import GoalVectorQuantizationModule
 
 
 def algomodule_factory(config):
@@ -36,17 +22,13 @@ def algomodule_factory(config):
     algo_name = algo_config.name
 
     if algo_name == "diffuser":
-        algo = TrajectoryDiffusionModule(
-            algo_config=algo_config, train_config=train_config
-        )
+        algo = TrajectoryDiffusionModule(algo_config=algo_config, train_config=train_config)
     elif algo_name == "diffuser_rot":
         algo = TrajectoryRotationDiffusionModule(
             algo_config=algo_config, train_config=train_config
         )
     elif algo_name == "rqvae":
-        algo = GoalVectorQuantizationModule(
-            algo_config=algo_config, train_config=train_config
-        )
+        algo = GoalVectorQuantizationModule(algo_config=algo_config, train_config=train_config)
     elif algo_name == "goalformer":
         algo = GoalFormerModule(algo_config=algo_config, train_config=train_config)
     elif algo_name == "contactformer":

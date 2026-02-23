@@ -1,36 +1,29 @@
-import sys, os
-
-sys.path.append("./third_party/EfficientSAM")
-import numpy as np
-import copy
-
-from pytorch_lightning.core.optimizer import LightningOptimizer
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import pytorch_lightning as pl
-import torch.nn.functional as F
-from algos.contact_algos import ContactFormerModule
-from algos.goal_algos import GoalFormerModule
-from algos.traj_algos import TrajectoryDiffusionModule
-from algos.traj_rot_algos import TrajectoryRotationDiffusionModule
-from models.clip import clip, tokenize
-import diffuser_utils.dataset_utils as DatasetUtils
-from diffuser_utils.guidance_loss import DiffuserGuidance
-from torchvision.ops import box_convert
-import open3d as o3d  # type: ignore
-
 import cv2
-import time
+import numpy as np
+import open3d as o3d  # type: ignore
+from PIL import Image
+import pytorch_lightning as pl
+from sklearn.mixture import GaussianMixture
+from scipy.signal import savgol_filter
+import torch
+import torch.nn.functional as F
+from torchvision.ops import box_convert
+from transformations import rotation_matrix
+
+# Third Party
+import sys
+
+sys.path.append("/opt/EfficientSAM")
 import groundingdino.datasets.transforms as T  # type: ignore
 from groundingdino.util.inference import load_model, predict  # type: ignore
 from efficient_sam.efficient_sam import build_efficient_sam  # type: ignore
 
-from transformations import rotation_matrix
-from PIL import Image
-from sklearn.mixture import GaussianMixture
-from scipy.signal import savgol_filter
-from scipy.interpolate import CubicHermiteSpline, PchipInterpolator
+# VidBot imports
+from vidbot.algos.contact_algos import ContactFormerModule
+from vidbot.algos.goal_algos import GoalFormerModule
+from vidbot.algos.traj_algos import TrajectoryDiffusionModule
+from vidbot.algos.traj_rot_algos import TrajectoryRotationDiffusionModule
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
 
 
 class AffordanceInferenceEngine(pl.LightningModule):
@@ -51,8 +44,8 @@ class AffordanceInferenceEngine(pl.LightningModule):
 
         if use_detector:
             self.nets["detector"] = load_model(
-                "./third_party/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
-                "./third_party/GroundingDINO/weights/groundingdino_swint_ogc.pth",
+                "/opt/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+                "/opt/GroundingDINO/weights/groundingdino_swint_ogc.pth",
             )
             self.transform = T.Compose(
                 [
@@ -67,12 +60,9 @@ class AffordanceInferenceEngine(pl.LightningModule):
 
         if use_esam:
             self.nets["esam"] = build_efficient_sam(
-                # encoder_patch_embed_dim=384,
-                # encoder_num_heads=6,
-                # checkpoint="./third_party/EfficientSAM/weights/efficient_sam_vits.pt",
                 encoder_patch_embed_dim=192,
                 encoder_num_heads=3,
-                checkpoint="./third_party/EfficientSAM/weights/efficient_sam_vitt.pt",
+                checkpoint="/opt/EfficientSAM/weights/efficient_sam_vitt.pt",
             ).eval()
 
         # Module config
@@ -108,12 +98,10 @@ class AffordanceInferenceEngine(pl.LightningModule):
 
         if self.traj_rot_config is not None:
             self.traj_rot_pretrained_path = traj_rot_config.TEST.ckpt_path
-            self.nets["traj_rot"] = (
-                TrajectoryRotationDiffusionModule.load_from_checkpoint(
-                    self.traj_rot_pretrained_path,
-                    algo_config=self.traj_rot_config.ALGORITHM,
-                    train_config=self.traj_rot_config.TRAIN,
-                )
+            self.nets["traj_rot"] = TrajectoryRotationDiffusionModule.load_from_checkpoint(
+                self.traj_rot_pretrained_path,
+                algo_config=self.traj_rot_config.ALGORITHM,
+                train_config=self.traj_rot_config.TRAIN,
             )
 
         if traj_guidance is not None:
@@ -137,14 +125,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
         selected_key = net_keys[0]
         if "goal" in net_keys:
             selected_key = "goal"
-        self.nets[selected_key].encode_action(
-            data_batch, clip_model, max_length=max_length
-        )
-
-    # @torch.no_grad()
-    # def forward(self, data_batch):
-    #     self.encode_action(data_batch)
-    #     # TODO: Implement the forward pass for each module ...
+        self.nets[selected_key].encode_action(data_batch, clip_model, max_length=max_length)
 
     @staticmethod
     def get_interaction_uvs(hmaps, thres=90, sample_nums=500):
@@ -189,7 +170,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
         color_np = data_batch["color_raw"][0].cpu().numpy().transpose(1, 2, 0)
         depth_np = data_batch["depth_raw"][0].cpu().numpy()
         intr = data_batch["intrinsics_raw"][0].cpu().numpy()
-        
+
         if "." in text:
             text_obj = text.split(".")[0]
             text_part = text.split(".")[1]
@@ -199,7 +180,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
         start_pos_all_obj2 = []
         end_pos_all_obj2 = []
         points_obj_subsampled_all_obj2 = []
-            
+
         # Forward pass
         color_np = (color_np * 255).astype(np.uint8)
         color_pil = Image.fromarray(color_np)
@@ -232,15 +213,11 @@ class AffordanceInferenceEngine(pl.LightningModule):
         gt_rot_init_all = []
         for bbox, label_text in zip(boxes, phrases):
             bbox = bbox.astype(np.int32)
-            bbox_resize_ratio = (
-                data_batch["color"].shape[-1] / data_batch["color_raw"].shape[-1]
-            )
+            bbox_resize_ratio = data_batch["color"].shape[-1] / data_batch["color_raw"].shape[-1]
             bbox_scaled = self.rescale_bbox(bbox, resize_ratio=bbox_resize_ratio)
             pad_ratio = 1
             center = np.array([bbox[1] + bbox[3], bbox[0] + bbox[2]]) / 2  # [h, w]
-            scale = (
-                max(bbox[3] - bbox[1], bbox[2] - bbox[0]) * pad_ratio
-            )  # shape before resize
+            scale = max(bbox[3] - bbox[1], bbox[2] - bbox[0]) * pad_ratio  # shape before resize
             resize_ratio = float(self.object_color_resolution / scale)
 
             object_color = DatasetUtils.crop_and_pad_image(
@@ -293,10 +270,8 @@ class AffordanceInferenceEngine(pl.LightningModule):
                     torch.ge(predicted_logits[0, 0, 0, :, :], 0).cpu().detach().numpy()
                 )
                 object_bbox_mask = object_bbox_mask.astype(np.float32).copy()
-                object_bbox_mask = cv2.erode(
-                    object_bbox_mask, np.ones((7, 7), np.uint8)
-                )
-                
+                object_bbox_mask = cv2.erode(object_bbox_mask, np.ones((7, 7), np.uint8))
+
             points_obj, _ = DatasetUtils.backproject(
                 depth_np,
                 intr,
@@ -326,18 +301,15 @@ class AffordanceInferenceEngine(pl.LightningModule):
             corners_dist = np.linalg.norm(pcd_obj_bbox_corners, axis=1)
             end_pos = pcd_obj_bbox_corners[np.argmin(corners_dist)]
 
-            points_obj_subsampled = points_obj[
-                np.random.choice(points_obj.shape[0], 2048)
-            ]
+            points_obj_subsampled = points_obj[np.random.choice(points_obj.shape[0], 2048)]
 
             scale_new = (
-                max(bbox_scaled[3] - bbox_scaled[1], bbox_scaled[2] - bbox_scaled[0])
-                * pad_ratio
+                max(bbox_scaled[3] - bbox_scaled[1], bbox_scaled[2] - bbox_scaled[0]) * pad_ratio
             )
 
             resize_ratio = float(self.object_color_resolution / scale_new)
             gt_rot_init = rotation_matrix(np.pi / 2, [0, 0, 1])[:3, :3]
-            
+
             if label_text == text_part:
                 # Add to queue
                 cropped_intr_all.append(cropped_intr)
@@ -354,12 +326,11 @@ class AffordanceInferenceEngine(pl.LightningModule):
                 start_pos_all.append(start_pos)
                 end_pos_all.append(end_pos)
                 points_obj_subsampled_all.append(points_obj_subsampled)
-                
+
             if label_text == text_obj:
                 start_pos_all_obj2.append(start_pos)
                 end_pos_all_obj2.append(end_pos)
                 points_obj_subsampled_all_obj2.append(points_obj_subsampled)
-
 
         if len(object_color_all) > 0:
             cropped_intr_all = np.stack(cropped_intr_all, axis=0)
@@ -370,22 +341,24 @@ class AffordanceInferenceEngine(pl.LightningModule):
             bbox_all = np.stack(bbox_all, axis=0)
             bbox_raw_all = np.stack(bbox_raw_all, axis=0)
             score_all = np.array(score_all)
-            start_pos_all = np.stack(start_pos_all, axis=0) # [N_part, 3]
-            end_pos_all = np.stack(end_pos_all, axis=0) # [N_obj, 3]
+            start_pos_all = np.stack(start_pos_all, axis=0)  # [N_part, 3]
+            end_pos_all = np.stack(end_pos_all, axis=0)  # [N_obj, 3]
             resize_ratio_all = np.array(resize_ratio_all).astype(np.float32)
             points_obj_subsampled_all = np.stack(points_obj_subsampled_all, axis=0)
             gt_rot_init_all = np.stack(gt_rot_init_all, axis=0)
-            
+
             # Add the object 2
-            start_pos_all_obj2 = np.stack(start_pos_all_obj2, axis=0) # [N_obj, 3]
+            start_pos_all_obj2 = np.stack(start_pos_all_obj2, axis=0)  # [N_obj, 3]
             end_pos_all_obj2 = np.stack(end_pos_all_obj2, axis=0)  # [N_obj, 3]
-            points_obj_subsampled_all_obj2 = np.stack(points_obj_subsampled_all_obj2, axis=0) # [N_obj, 2048, 3]
-            
+            points_obj_subsampled_all_obj2 = np.stack(
+                points_obj_subsampled_all_obj2, axis=0
+            )  # [N_obj, 2048, 3]
+
             # Asign the object points to the part
             dist_part2obj = np.linalg.norm(
                 start_pos_all[:, None] - start_pos_all_obj2, axis=-1
-            ) # [N_part, N_obj]
-            min_dist_ids = np.argmin(dist_part2obj, axis=1) # [N_part]
+            )  # [N_part, N_obj]
+            min_dist_ids = np.argmin(dist_part2obj, axis=1)  # [N_part]
             for i, min_dist_id in enumerate(min_dist_ids):
                 start_pos_all[i] = start_pos_all_obj2[min_dist_id]
                 end_pos_all[i] = end_pos_all_obj2[min_dist_id]
@@ -415,8 +388,6 @@ class AffordanceInferenceEngine(pl.LightningModule):
             points_obj_subsampled_all = np.zeros((0, 2048, 3))
             gt_rot_init_all = np.zeros((0, 3, 3))
 
-        
-        
         detection_results = {
             "cropped_intr_all": cropped_intr_all,
             "object_depth_all": object_depth_all,
@@ -494,17 +465,11 @@ class AffordanceInferenceEngine(pl.LightningModule):
             # contact_pix = torch.tensor(gm.means_).float().cuda()[None]  # [B, 2, 2]
             contact_pix = max_uv[:, None]
             contact_pix_sample = gm.sample(sample_num)[0]
-            contact_pix_sample = (
-                torch.from_numpy(contact_pix_sample).float().cuda()[None]
-            )
+            contact_pix_sample = torch.from_numpy(contact_pix_sample).float().cuda()[None]
 
         contact_pix_sample = contact_pix_sample.long()
-        v_index = torch.clamp(
-            contact_pix_sample[:, :, 1], 0, patch_height - 1
-        )  # [B, 1000]
-        u_index = torch.clamp(
-            contact_pix_sample[:, :, 0], 0, patch_width - 1
-        )  # [B, 1000]
+        v_index = torch.clamp(contact_pix_sample[:, :, 1], 0, patch_height - 1)  # [B, 1000]
+        u_index = torch.clamp(contact_pix_sample[:, :, 0], 0, patch_width - 1)  # [B, 1000]
         start_pos_d = data_batch["object_depth"][
             torch.arange(data_batch["object_depth"].size(0))[:, None], v_index, u_index
         ]  # [B, 1000]
@@ -518,9 +483,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
 
         # Compute contact pixels on the original images
         resize_ratio = data_batch["resize_ratio"]  # [B]
-        contact_pix_all = torch.cat(
-            [contact_pix, contact_pix_sample], dim=1
-        )  # [B, 1001, 2]
+        contact_pix_all = torch.cat([contact_pix, contact_pix_sample], dim=1)  # [B, 1001, 2]
 
         bbox = data_batch["bbox"].clone()  # [B, 4]
         bbox_center_u = (bbox[:, 0] + bbox[:, 2]) / 2
@@ -553,9 +516,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
         contaxt_pix_samples_one = torch.cat(
             [contact_pix_sample_full, ones_samples], dim=-1
         )  # [B, 1000, 3]
-        start_point_samples = (
-            contaxt_pix_samples_one @ inv_intr.transpose(1, 2)
-        ) * start_pos_d[
+        start_point_samples = (contaxt_pix_samples_one @ inv_intr.transpose(1, 2)) * start_pos_d[
             ..., None
         ]  # [B, 1000, 3] @ [B, 3, 3] -> [B, 1000, 3] * [B, 1000, 1]
 
@@ -565,9 +526,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
         )  # [B,1]
         start_point_dist = start_point_dist.repeat(1, 3)  # [B, 3]
 
-        start_point = torch.where(
-            start_point_dist < 0.2, start_point, start_point_samples_med
-        )
+        start_point = torch.where(start_point_dist < 0.2, start_point, start_point_samples_med)
 
         # Compute the distance
         start_pos_depth = torch.ones_like(data_batch["depth"])  # [B, H, W]
@@ -610,9 +569,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
             pcd_corners = np.array(pcd_bbox.get_box_points())
             corners_dist = np.linalg.norm(pcd_corners, axis=1)
             end_pos = pcd_corners[np.argmin(corners_dist)]
-            data_batch["end_pos"] = (
-                torch.from_numpy(end_pos).float().unsqueeze(0).cuda()
-            )
+            data_batch["end_pos"] = torch.from_numpy(end_pos).float().unsqueeze(0).cuda()
         minimal_traj = np.concatenate(
             [
                 data_batch["start_pos"].cpu().numpy(),
@@ -624,12 +581,8 @@ class AffordanceInferenceEngine(pl.LightningModule):
             minimal_traj, radii=radii
         )  # , enlarge_ratio=4)
 
-        data_batch["gt_traj_min_bound"] = (
-            torch.tensor(min_bound).unsqueeze(0).cuda().float()
-        )
-        data_batch["gt_traj_max_bound"] = (
-            torch.tensor(max_bound).unsqueeze(0).cuda().float()
-        )
+        data_batch["gt_traj_min_bound"] = torch.tensor(min_bound).unsqueeze(0).cuda().float()
+        data_batch["gt_traj_max_bound"] = torch.tensor(max_bound).unsqueeze(0).cuda().float()
 
         # Forward pass
         if use_guidance:
@@ -681,9 +634,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
                 )  # [H, 3]
 
                 # fit the trajectory to get more waypioints
-                fill_indices = np.linspace(
-                    0, len(smoothed_traj) - 1, len(smoothed_traj)
-                )
+                fill_indices = np.linspace(0, len(smoothed_traj) - 1, len(smoothed_traj))
                 smoothed_traj_x = DatasetUtils.spline_interpolation(
                     fill_indices, smoothed_traj[:, 0]
                 )[0]
@@ -793,17 +744,13 @@ class AffordanceInferenceEngine(pl.LightningModule):
             )
             pcd.orient_normals_towards_camera_location(camera_location=[0, 0, 0])
             normals_np_bi = np.array(pcd.normals)  # [N, 3]
-            normals_np_bi = normals_np_bi.reshape(height, width, 3).transpose(
-                2, 0, 1
-            )  # [3, H, W]
+            normals_np_bi = normals_np_bi.reshape(height, width, 3).transpose(2, 0, 1)  # [3, H, W]
             normals.append(torch.from_numpy(normals_np_bi).float().cuda())
         normals = torch.stack(normals, dim=0)  # [B, 3, H, W]
         v_index = torch.clamp(
             data_batch["contact_pix_samples_patch"][:, :, 1], 0, 256 - 1
         ).long()  # [B, 1000]
-        u_index = torch.clamp(
-            data_batch["contact_pix_samples_patch"][:, :, 0], 0, 256 - 1
-        ).long()
+        u_index = torch.clamp(data_batch["contact_pix_samples_patch"][:, :, 0], 0, 256 - 1).long()
 
         contact_point_normals = normals[
             torch.arange(normals.size(0)), :, v_index.long(), u_index.long()
@@ -879,35 +826,23 @@ class AffordanceInferenceEngine(pl.LightningModule):
                 torch.from_numpy(goal_pix_samples).float().cuda()[None]
             )  # [B, 1000, 2]
 
-        # goal_pix = goal_pix
-        # goal_pix = goal_pix.long()
-        # v_index = torch.clamp(goal_pix[:, 1], 0, height - 1)
-        # u_index = torch.clamp(goal_pix[:, 0], 0, width - 1)
-        # goal_depth = goal_d[torch.arange(goal_d.size(0)), v_index, u_index]
-
         goal_pix_samples = goal_pix_samples.long()
         v_index = torch.clamp(goal_pix_samples[:, :, 1], 0, height - 1)  # [B, 1000]
         u_index = torch.clamp(goal_pix_samples[:, :, 0], 0, width - 1)  # [B, 1000]
-        goal_depth = goal_d[
-            torch.arange(goal_d.size(0))[:, None], v_index, u_index
-        ]  # [B, 1000]
+        goal_depth = goal_d[torch.arange(goal_d.size(0))[:, None], v_index, u_index]  # [B, 1000]
         goal_depth_samples = goal_depth.clone()
         goal_depth = goal_depth.mean(dim=1)  # [B]
 
         inv_intr = data_batch["inv_intrinsics"]  # [B, 3, 3]
         ones = torch.ones(batch_size, 1).to(goal_pix.device)
         goal_pix_one = torch.cat([goal_pix, ones], dim=1)  # [B, 3]
-        goal_point = (goal_pix_one @ inv_intr.transpose(1, 2)) * goal_depth[
-            :, None
-        ]  # [B, 3]
+        goal_point = (goal_pix_one @ inv_intr.transpose(1, 2)) * goal_depth[:, None]  # [B, 3]
         goal_point = goal_point[:, 0]
 
         ones_samples = torch.ones(batch_size, goal_pix_samples.shape[1], 1).to(
             goal_pix_samples.device
         )
-        goal_pix_samples_one = torch.cat(
-            [goal_pix_samples, ones_samples], dim=-1
-        )  # [B, 1000, 3]
+        goal_pix_samples_one = torch.cat([goal_pix_samples, ones_samples], dim=-1)  # [B, 1000, 3]
         goal_point_samples = (
             goal_pix_samples_one @ inv_intr.transpose(1, 2)
         ) * goal_depth_samples[
@@ -915,43 +850,6 @@ class AffordanceInferenceEngine(pl.LightningModule):
         ]  # [B, 1000, 3] @ [B, 3, 3] -> [B, 1000, 3] * [B, 1000, 1]
         goal_point_samples = goal_point_samples * goal_scale
         goal_point = goal_point * goal_scale
-
-        # goal_point_samples = (
-        #     goal_pix_samples_one @ inv_intr.transpose(1, 2)
-        # ) * goal_depth[
-        #     ..., None
-        # ]  # [B, 1000, 3] @ [B, 3, 3] -> [B, 1000, 3] * [B, 1000, 1]
-
-        # Visualize the goal_vf
-        # goal_vf_vis = DatasetUtils.visualize_vector_field(
-        #     goal_vf[0].cpu().numpy().transpose(1, 2, 0)
-        # )
-        # color_vis = data_batch["color"][0].cpu().numpy().transpose(1, 2, 0)
-        # color_vis = (color_vis * 255).astype(np.uint8)[..., [2, 1, 0]].copy()
-        # for sampled_uv in goal_pix_sample[0].cpu().numpy():
-        #     cv2.circle(
-        #         color_vis,
-        #         (int(sampled_uv[0]), int(sampled_uv[1])),
-        #         3,
-        #         (255, 0, 0),
-        #         -1,
-        #     )
-        # cv2.circle(
-        #     color_vis,
-        #     (int(goal_pix[0, 0]), int(goal_pix[0, 1])),
-        #     6,
-        #     (0, 255, 0),
-        #     -1,
-        # )
-        # cv2.imshow("goal_vf", color_vis)
-        # cv2.waitKey(0)
-
-        # Visualize the goal_vf
-        # goal_point = goal_point * goal_scale
-        # goal_point_samples = goal_point[:, None].expand(-1, sample_num, -1)
-        # goal_point_samples = (
-        #     goal_point_samples + torch.randn_like(goal_point_samples) * 0.03
-        # )
 
         outputs.update(
             {
@@ -1012,9 +910,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
             )
 
             # Sample from the fitted distribution and draw on the image
-            sampled_uvs = np.random.multivariate_normal(
-                uv, sigma * sigma_scale, sample_num
-            )
+            sampled_uvs = np.random.multivariate_normal(uv, sigma * sigma_scale, sample_num)
             results_sample.append(torch.from_numpy(sampled_uvs).float())
             results_uv.append(uv)
         results_uv = torch.stack(results_uv, dim=0).to(vector_field.device)
@@ -1082,20 +978,10 @@ class AffordanceInferenceEngine(pl.LightningModule):
                 mesh = o3d.geometry.TriangleMesh()
                 mesh.vertices = o3d.utility.Vector3dVector(data["mesh_vertices"])
                 mesh.triangles = o3d.utility.Vector3iVector(data["mesh_faces"])
-                mesh.vertex_colors = o3d.utility.Vector3dVector(
-                    data["mesh_vertex_colors"]
-                )
+                mesh.vertex_colors = o3d.utility.Vector3dVector(data["mesh_vertex_colors"])
                 mesh.compute_vertex_normals()
                 data_batch["mesh"] = mesh
                 skip_keys += ["mesh_vertices", "mesh_faces", "mesh_vertex_colors"]
-
-            # elif "guide_losses" and k not in skip_keys:
-            #     guide_losses = {}
-            #     for k2, v2 in v.items():
-            #         k2 = k2.split("-")[-1]
-            #         guide_losses[k2] = torch.from_numpy(v2)
-            #     data_batch[k] = guide_losses
-            #     skip_keys.append(k)
 
             elif isinstance(v, np.ndarray) and k not in skip_keys:
                 data_batch[k] = torch.from_numpy(v).cuda()

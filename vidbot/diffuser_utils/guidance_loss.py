@@ -1,9 +1,5 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
-from vidbot.models.layers_2d import Project3D, BackprojectDepth
-import vidbot.diffuser_utils.dataset_utils as DatasetUtils
-import open3d as o3d
 
 
 class Guidance:
@@ -89,7 +85,6 @@ class DiffuserGuidance:
         set_goal_infinite=False,
         scale=1.0,
         valid_horizon=-1,
-        exclude_object_points=False,
     ):
         self.goal_weight = goal_weight
         self.noncollide_weight = noncollide_weight
@@ -102,9 +97,35 @@ class DiffuserGuidance:
         else:
             self.goal_guidance = GoalConditionedGuidance(scale, valid_horizon)
         self.contact_guidance = MapContactGuidance(scale, valid_horizon)
-        self.noncollide_guidance = MapNonCollisionGuidance(
-            scale, valid_horizon, exclude_object_points
-        )
+        self.noncollide_guidance = MapNonCollisionGuidance(scale, valid_horizon)
+        self.smooth_guidance = TrajectorySmoothnessGuidance(scale, valid_horizon)
+        self.normal_guidance = NormalVectorGuidance(scale, valid_horizon)
+
+    def reset(
+        self,
+        goal_weight=0,
+        noncollide_weight=0,
+        contact_weight=0,
+        smooth_weight=0,
+        normal_weight=0,
+        set_goal_infinite=False,
+        scale=1.0,
+        valid_horizon=-1,
+    ):
+
+        print("... Reseting guidance ...")
+        self.goal_weight = goal_weight
+        self.noncollide_weight = noncollide_weight
+        self.contact_weight = contact_weight
+        self.smooth_weight = smooth_weight
+        self.normal_weight = normal_weight
+        self.set_goal_infinite = set_goal_infinite
+        if self.set_goal_infinite:
+            self.goal_guidance = InfiniteGoalConditionedGuidance(scale, valid_horizon)
+        else:
+            self.goal_guidance = GoalConditionedGuidance(scale, valid_horizon)
+        self.contact_guidance = MapContactGuidance(scale, valid_horizon)
+        self.noncollide_guidance = MapNonCollisionGuidance(scale, valid_horizon)
         self.smooth_guidance = TrajectorySmoothnessGuidance(scale, valid_horizon)
         self.normal_guidance = NormalVectorGuidance(scale, valid_horizon)
 
@@ -186,9 +207,7 @@ class GoalConditionedGuidance(Guidance):
         super(GoalConditionedGuidance, self).__init__(scale, valid_horizon)
         self.proj = Project3D()
 
-    def compute_guidance_loss(
-        self, x, t, data_batch, num_goals=1, strict_goal=False, include_far_goals=False
-    ):
+    def compute_guidance_loss(self, x, t, data_batch, num_goals=1, strict_goal=False):
         """
         Evaluates all guidance losses and total and individual values.
         - x: (B, N, H, 3) the trajectory to use to compute losses
@@ -229,26 +248,9 @@ class GoalConditionedGuidance(Guidance):
             traj_goal_coords = traj_goal_coords.repeat(1, 1, 100)  # [B, 3, R]
             traj_goal_samples = traj_goal_coords * depth_samples.unsqueeze(1)  # [B, 3, R]
             traj_goal_samples = traj_goal_samples.transpose(1, 2)  # [B, R, 3]
-            if "goal_pos_samples" in data_batch:
-                pred_goal_samples = data_batch["goal_pos_samples"]  # [B, R, 3]
-                traj_goal_samples = torch.cat([traj_goal_samples, pred_goal_samples], dim=1)
-            if include_far_goals:
-                object_top_normal = data_batch["object_top_normal"]  # [B, 3]
-                start_pos = data_batch["start_pos"]  # [B, 3]
-                goal_pos_sym = []
-                for sgn in [-1, 1]:
-                    goal_pos_sgn = start_pos + sgn * object_top_normal * 10
-                    goal_pos_sym.append(goal_pos_sgn)
-                goal_pos_sym = torch.stack(goal_pos_sym, dim=1)  # [B, 2, 3]
-                goal_pos_sym_dist = torch.norm(goal_pos_sym, dim=-1)  # [B, 2]
-                goal_pos_id = torch.argmax(goal_pos_sym_dist, dim=-1)  # [B]
-                far_goal_pos = goal_pos_sym[torch.arange(bsize), goal_pos_id]  # [B, 3]
-                far_goal_samples = far_goal_pos[:, None].expand(
-                    -1, traj_goal_samples.shape[1], -1
-                )  # [B, R, 3]
-                traj_goal_samples = torch.cat(
-                    [traj_goal_samples, far_goal_samples], dim=1
-                )  # [B, 2R, 3]
+            pred_goal_samples = data_batch["goal_pos_samples"]  # [B, R, 3]
+            traj_goal_samples = torch.cat([traj_goal_samples, pred_goal_samples], dim=1)
+
             traj_goal_samples_scaled = self.scale_trajectory(
                 traj_goal_samples,
                 data_batch["gt_traj_min_bound"],
@@ -299,9 +301,10 @@ class GoalConditionedGuidance(Guidance):
         return loss_tot, guide_losses
 
 
-class InfiniteGoalConditionedGuidance(GoalConditionedGuidance):
+class GoalConditionedGuidanceV2(Guidance):
     def __init__(self, scale, valid_horizon=-1):
-        super(InfiniteGoalConditionedGuidance, self).__init__(scale, valid_horizon)
+        super(GoalConditionedGuidanceV2, self).__init__(scale, valid_horizon)
+        self.proj = Project3D()
 
     def compute_guidance_loss(self, x, t, data_batch):
         """
@@ -322,6 +325,79 @@ class InfiniteGoalConditionedGuidance(GoalConditionedGuidance):
         # gt_traj_goal = gt_traj[:, -1].unsqueeze(1)  # [B, 1, 3]
         # traj_goal_pix = self.proj(gt_traj_goal, intr).squeeze(-1)  # [B, 2]
         # traj_goal_pix = traj_goal_pix.clone().to(torch.int64)
+
+        start_pos = data_batch["start_pos"]
+        goal_pos = data_batch["goal_pos"]
+        interaction_dir = goal_pos - start_pos
+        interaction_dir = F.normalize(interaction_dir, dim=-1)  # [B, 3]
+
+        # Sample points along the ray
+        traj_goal_pix = data_batch["goal_pix"]
+        height, width = depth.size()[1:]
+        v_index = torch.clamp(traj_goal_pix[:, 1], 0, height - 1)
+        u_index = torch.clamp(traj_goal_pix[:, 0], 0, width - 1)
+
+        depth_goal_pix = depth[torch.arange(bsize), v_index, u_index]
+        depth_min_goal_pix = torch.ones_like(depth_goal_pix) * -0.25
+        depth_max_goal_pix = torch.ones_like(depth_goal_pix) * 0.25
+
+        # Do sampling along within the depth
+        samples = torch.linspace(0, 1, 100, device=depth.device)
+        samples = samples[None].repeat(bsize, 1)  # [B, R]
+        depth_samples = depth_min_goal_pix[:, None] + samples * (
+            depth_max_goal_pix[:, None] - depth_min_goal_pix[:, None]
+        )  # [B, R]
+
+        traj_goal_samples = goal_pos.clone()[..., None].repeat(1, 1, 100)  # [B, 3, R]
+        traj_goal_samples = traj_goal_samples + interaction_dir[
+            ..., None
+        ] * depth_samples.unsqueeze(
+            1
+        )  # [B, 3, R]
+        traj_goal_samples = traj_goal_samples.transpose(1, 2)  # [B, R, 3]
+
+        traj_goal_samples_scaled = self.scale_trajectory(
+            traj_goal_samples,
+            data_batch["gt_traj_min_bound"],
+            data_batch["gt_traj_max_bound"],
+        )  # [B, R, 3]
+
+        traj_goal_samples_scaled = traj_goal_samples_scaled.unsqueeze(1).expand(
+            -1, num_samp, -1, -1
+        )  # [B, N, R, 3]
+        x_goal = x[:, :, : self.valid_horizon][:, :, -1, :].unsqueeze(2)  # [B, N, 1, 3]
+        x_goal = x_goal.expand(-1, -1, 100, -1)  # [B, N, R, 3]
+
+        # MSE loss provides smooth gradient for goal-based optimization
+        goal_loss = F.mse_loss(x_goal, traj_goal_samples_scaled, reduction="none")  # [B, N, R, 3]
+        goal_loss = goal_loss.mean(dim=-1)  # [B, N, R]
+        goal_loss, _ = goal_loss.min(dim=-1)  # [B, N]
+        guide_losses["goal_loss"] = goal_loss  # [B, N]
+
+        goal_loss = goal_loss.mean()
+        loss_tot += goal_loss
+        return loss_tot, guide_losses
+
+
+class InfiniteGoalConditionedGuidance(GoalConditionedGuidance):
+    def __init__(self, scale, valid_horizon=-1):
+        super(InfiniteGoalConditionedGuidance, self).__init__(scale, valid_horizon)
+
+    def compute_guidance_loss(self, x, t, data_batch):
+        """
+        Evaluates all guidance losses and total and individual values.
+        - x: (B, N, H, 3) the trajectory to use to compute losses and 6 is (x, y, vel, yaw, acc, yawvel)
+        - data_batch : various tensors of size (B, ...) that may be needed for loss calculations
+        """
+        guide_losses = dict()
+        loss_tot = 0.0
+
+        bsize, num_samp, horizon, _ = x.size()
+        intr = data_batch["intrinsics"]
+        depth = data_batch["depth"]  # [B, H, W]
+        inv_intr = torch.inverse(intr)
+
+        # # Dummy ..
         goal_pix = data_batch["goal_pix"]  # [B, 2]
         batch_size, height, width = depth.shape
         v_index = torch.clamp(goal_pix[:, 1], 0, height - 1).long()
@@ -367,11 +443,10 @@ class InfiniteGoalConditionedGuidance(GoalConditionedGuidance):
 
 
 class MapNonCollisionGuidance(Guidance):
-    def __init__(self, scale, valid_horizon=-1, exclude_object_points=False):
+    def __init__(self, scale, valid_horizon=-1):
         super(MapNonCollisionGuidance, self).__init__(scale, valid_horizon)
-        self.exclude_object_points = exclude_object_points
 
-    def compute_guidance_loss(self, x, t, data_batch, num_noncollide=60, tsdf_threshold=0.2):
+    def compute_guidance_loss(self, x, t, data_batch, num_noncollide=60):
         """
         Evaluates all guidance losses and total and individual values.
         - x: (B, N, H, 3) diffusion states
@@ -383,14 +458,8 @@ class MapNonCollisionGuidance(Guidance):
 
         voxel_bounds = data_batch["voxel_bounds"]  # [B, 2]
         object_points = data_batch["object_points"]  # [B, O, 3]
-        # [B, G, 3]
-        gripper_points_in_contact = data_batch["gripper_points_in_contact"]
-        if self.exclude_object_points:
-            object_points = gripper_points_in_contact
-        else:
-            object_points = torch.cat([gripper_points_in_contact, object_points], dim=1)
-
         num_pcdobj = object_points.size(1)
+
         gt_traj_min_bound = data_batch["gt_traj_min_bound"]
         gt_traj_max_bound = data_batch["gt_traj_max_bound"]
         tsdf = data_batch["tsdf_grid_fine"][:, None]  # [B, 1, D, H, W]
@@ -400,7 +469,7 @@ class MapNonCollisionGuidance(Guidance):
             x, gt_traj_min_bound, gt_traj_max_bound
         )  # [B, N, H, 3]
 
-        # With object points
+        #### With object points
         # noncollide_after_horizon = horizon - num_noncollide
         waypoints = waypoints.unsqueeze(2).expand(-1, -1, object_points.size(1), -1, -1)[
             ..., -num_noncollide:, :
@@ -434,7 +503,7 @@ class MapNonCollisionGuidance(Guidance):
         )  # [B, 1, N, H, 1]
         query_tsdf = query_tsdf.squeeze(-1).squeeze(1)  # [B, N, H]
         query_tsdf = query_tsdf[:, :, : self.valid_horizon]  # [B, N, H]
-        map_loss = F.relu(-(query_tsdf - tsdf_threshold)).mean(dim=-1)  # [B, N]
+        map_loss = F.relu(-(query_tsdf - 0.1)).mean(dim=-1)  # [B, N]
 
         guide_losses = {"collision_loss": map_loss}
         map_loss = map_loss.mean()
@@ -446,7 +515,7 @@ class MapContactGuidance(Guidance):
     def __init__(self, scale, valid_horizon=-1):
         super(MapContactGuidance, self).__init__(scale, valid_horizon)
 
-    def compute_guidance_loss(self, x, t, data_batch):
+    def compute_guidance_loss(self, x, t, data_batch, num_goals=10):
         """
         Evaluates all guidance losses and total and individual values.
         - x: (B, N, H, 3) diffusion states
@@ -484,7 +553,7 @@ class MapContactGuidance(Guidance):
 
         # Compute the guidance loss
         query_tsdf = query_tsdf[:, :, : self.valid_horizon]  # [B, N, H']
-        goal_tsdf = query_tsdf[:, :, :horizon]  # [B, N, 5]
+        goal_tsdf = query_tsdf[:, :, -num_goals:]  # [B, N, 5]
         contact_loss = F.mse_loss(goal_tsdf, torch.zeros_like(goal_tsdf), reduction="none").mean(
             dim=-1
         )  # [B, N]
@@ -544,3 +613,33 @@ class NormalVectorGuidance(Guidance):
         normal_loss = normal_loss.mean()
         loss_tot += normal_loss
         return loss_tot, guide_losses
+
+
+# TODO: implememnt the collision-based guidance loss, c.f. interpolate_voxel_grid_features in models/feature_extractor.py
+
+if __name__ == "__main__":
+    from datasets.dataset import Epic3DAffordanceDataset
+    from omegaconf import OmegaConf
+    from easydict import EasyDict as edict
+
+    cfg_path = "configs/traj_gen.yaml"
+    cfg = edict(OmegaConf.to_container(OmegaConf.load(cfg_path)))
+
+    test_kwargs = cfg.DATA
+    test_kwargs.traj_label_path = "datasets/labels/dataset_stir.json"
+    test_dataset = Epic3DAffordanceDataset(train=False, **test_kwargs)
+
+    diffuser_guidance = DiffuserGuidance()
+
+    x = torch.randn(1, 10, 80, 3).cuda()
+    for i in range(len(test_dataset)):
+        # if i != 370:
+        #     continue
+        data_batch = test_dataset[i]
+        for k, v in data_batch.items():
+            if isinstance(v, torch.Tensor):
+                data_batch[k] = v.unsqueeze(0).cuda()
+        loss_tot, guide_losses = diffuser_guidance.compute_guidance_loss(x, data_batch)
+        print(loss_tot)
+        print(guide_losses)
+        print("Done!")

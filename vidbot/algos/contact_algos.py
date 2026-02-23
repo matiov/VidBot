@@ -1,24 +1,15 @@
+import cv2
 import numpy as np
-import copy
-
-from pytorch_lightning.core.optimizer import LightningOptimizer
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import pytorch_lightning as pl
 import torch.nn.functional as F
-
-import diffuser_utils.dataset_utils as DatasetUtils
 import torchvision
-import cv2
-from algos.vq_algos import GoalVectorQuantizationModule
-from options import load_options
-from models.contactformer import ContactFormer
-import pandas as pd
-from models.clip.clip import tokenize
-from copy import deepcopy
-from models.gpt import GPT, GPTConfig
 
+
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+from vidbot.models.contactformer import ContactFormer
 from models.clip import clip, tokenize
 
 # CLIP-based action text encoder
@@ -93,9 +84,7 @@ class ContactFormerModule(pl.LightningModule):
 
         # Drop the action
         if self.conditioning_drop_action > 0:
-            data_batch["action_tokens"][drop_mask_action] = action_tokens_null[
-                drop_mask_action
-            ]
+            data_batch["action_tokens"][drop_mask_action] = action_tokens_null[drop_mask_action]
 
         self.encode_action(data_batch)
         losses = self.nets["policy"].compute_losses(data_batch, training=True)
@@ -131,9 +120,7 @@ class ContactFormerModule(pl.LightningModule):
             vf_gene = vf_genes[:, hi]  # [B, 2, H, W]
 
             vf_vis = self.visualize_vector_field(vf_inp)
-            vf_gene_vis = self.visualize_vector_field(
-                vf_gene
-            )  # already between [-1, 1]
+            vf_gene_vis = self.visualize_vector_field(vf_gene)  # already between [-1, 1]
 
             vf_vis = torchvision.utils.make_grid(vf_vis, nrow=4)
             vf_gene_vis = torchvision.utils.make_grid(vf_gene_vis, nrow=4)
@@ -145,12 +132,8 @@ class ContactFormerModule(pl.LightningModule):
                 vf_gene, data_batch, sigma_scale=0.1, mask=data_batch["object_mask"]
             )
 
-            contact_coord_gt_vis = torchvision.utils.make_grid(
-                contact_coord_gt_vis, nrow=4
-            )
-            contact_coord_pred_vis = torchvision.utils.make_grid(
-                contact_coord_pred_vis, nrow=4
-            )
+            contact_coord_gt_vis = torchvision.utils.make_grid(contact_coord_gt_vis, nrow=4)
+            contact_coord_pred_vis = torchvision.utils.make_grid(contact_coord_pred_vis, nrow=4)
 
             if hi == 0:
                 self.logger.log_image(
@@ -188,27 +171,19 @@ class ContactFormerModule(pl.LightningModule):
         object_mask = data_batch["object_mask"][:, None]
         object_mask_vis = torchvision.utils.make_grid(object_mask, nrow=4)
 
-        object_mask_pred_vis = torchvision.utils.make_grid(
-            object_mask_pred[:, None], nrow=4
-        )
+        object_mask_pred_vis = torchvision.utils.make_grid(object_mask_pred[:, None], nrow=4)
 
         self.logger.log_image(
             "val_vis/object_color", [object_color_vis], step=self.curr_train_step
         )
-        self.logger.log_image(
-            "val_vis/object_mask", [object_mask_vis], step=self.curr_train_step
-        )
+        self.logger.log_image("val_vis/object_mask", [object_mask_vis], step=self.curr_train_step)
         self.logger.log_image(
             "val_vis/object_mask_pred",
             [object_mask_pred_vis],
             step=self.curr_train_step,
         )
-        self.logger.log_image(
-            "val_vis/scores_pred", [scores_pred_vis], step=self.curr_train_step
-        )
-        self.logger.log_image(
-            "val_vis/scores_gt", [scores_gt_vis], step=self.curr_train_step
-        )
+        self.logger.log_image("val_vis/scores_pred", [scores_pred_vis], step=self.curr_train_step)
+        self.logger.log_image("val_vis/scores_gt", [scores_gt_vis], step=self.curr_train_step)
 
     def visualize_heatmap(self, score, data_batch):
         color = data_batch["object_color"]

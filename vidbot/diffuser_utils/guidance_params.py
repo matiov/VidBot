@@ -1,64 +1,81 @@
-PARAMS1 = {
-    "goal_weight": 100.0,
-    "noncollide_weight": 200.0,
+OPEN_PARAMS = {
+    "goal_weight": 200.0,
+    "goal_scale": 1.0,
+    "smooth_weight": 15000.0,
+    "noncollide_weight": 0.0,
     "normal_weight": 200.0,
+    "normal_sign": 1,
     "contact_weight": 0.0,
-    "fine_voxel_resolution": 32,
-    "exclude_object_points": True,
+    "set_goal_infinite": False,
+    "fine_voxel_resolution": None,
 }
 
-PARAMS2 = {
+CLOSE_PARAMS = {
     "goal_weight": 100.0,
+    "goal_scale": 1.0,
+    "smooth_weight": 15000.0,
+    "noncollide_weight": 0.0,
+    "normal_weight": 200.0,
+    "normal_sign": -1,
+    "contact_weight": 0.0,
+    "set_goal_infinite": True,
+    "fine_voxel_resolution": None,
+}
+
+TAKE_PARAMS = {
+    "goal_weight": 100.0,
+    "goal_scale": 1.0,
+    "smooth_weight": 15000.0,
     "noncollide_weight": 200.0,
     "normal_weight": 10.0,
+    "normal_sign": 1,
     "contact_weight": 0.0,
+    "set_goal_infinite": False,
     "fine_voxel_resolution": 128,
-    "exclude_object_points": False,
 }
 
-PARAMS3 = {
+PICKUP_PARAMS = {
     "goal_weight": 100.0,
-    "noncollide_weight": 500.0,
-    "normal_weight": 0.0,
-    "contact_weight": 500.0,
+    "goal_scale": 1.0,
+    "smooth_weight": 15000.0,
+    "noncollide_weight": 200.0,
+    "normal_weight": 10.0,
+    "normal_sign": 1,
+    "contact_weight": 0.0,
+    "set_goal_infinite": False,
     "fine_voxel_resolution": 128,
-    "exclude_object_points": True,
 }
+
+PLACE_PARAMS = {
+    "goal_weight": 100.0,
+    "goal_scale": 1.0,
+    "smooth_weight": 15000.0,
+    "noncollide_weight": 200.0,
+    "normal_weight": 10.0,
+    "normal_sign": -1,
+    "contact_weight": 0.0,
+    "set_goal_infinite": False,
+    "fine_voxel_resolution": 128,
+}
+
+PRESS_PARAMS = {
+    "goal_weight": 100.0,
+    "goal_scale": 1.0,
+    "smooth_weight": 15000.0,
+    "noncollide_weight": 0.0,
+    "normal_weight": 100.0,
+    "normal_sign": -1,
+    "contact_weight": 0.0,
+    "set_goal_infinite": False,
+    "fine_voxel_resolution": None,
+}
+
 
 GUIDANCE_PARAMS_DICT = {
-    "open": PARAMS1,
-    "close": PARAMS1,
-    "pull": PARAMS1,
-    "push": PARAMS1,
-    "press": PARAMS1,
-    "pick": PARAMS2,
-    "pickup": PARAMS2,
-    "take": PARAMS2,
-    "get": PARAMS2,
-    "put": PARAMS2,
-    "place": PARAMS2,
-    "putdown": PARAMS2,
-    "drop": PARAMS2,
-    "wipe": PARAMS3,
-    "move": PARAMS3,
-    "other": PARAMS2,
-
+    "open": OPEN_PARAMS,
+    "close": CLOSE_PARAMS,
+    "take": TAKE_PARAMS,
+    "pickup": PICKUP_PARAMS,
+    "place": PLACE_PARAMS,
+    "press": PRESS_PARAMS,
 }
-
-COMMON_ACTIONS = [
-    "open",
-    "close",
-    "pull",
-    "push",
-    "press",
-    "pick",
-    "pickup",
-    "take",
-    "get",
-    "put",
-    "place",
-    "putdown",
-    "drop",
-    "wipe",
-    "move",
-]

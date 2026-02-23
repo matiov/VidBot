@@ -1,14 +1,10 @@
 import torch
 import torch.nn as nn
-import numpy as np
-from typing import List, Optional, Tuple
-from collections import OrderedDict
-from einops import rearrange
-from vidbot.models.layers_3d import SinusoidalPosEmb
+
 from vidbot.models.attention import SelfAttentionBlock, CrossAttentionLayer
 
 
-class FeaturePerceiver(nn.Module):
+class FeaturePreceiver(nn.Module):
 
     def __init__(
         self,

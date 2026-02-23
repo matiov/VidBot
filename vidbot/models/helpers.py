@@ -1,15 +1,14 @@
+from math import ceil
+
 import numpy as np
+import open3d as o3d
+from skimage import measure
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from numba import njit, prange
-from skimage import measure
-import open3d as o3d
-import time
-import torch
-from math import ceil
-from vidbot.models.clip import clip, tokenize
+
+from vidbot.models.clip import tokenize
 
 
 def compute_null_text_embeddings(vlm, batch_size=1, device="cuda"):
@@ -161,18 +160,6 @@ def get_view_frustum(depth_im, cam_intr, cam_pose):
     )
     view_frust_pts = view_frust_pts.T @ cam_pose[:3, :3].T + cam_pose[:3, 3]
     return view_frust_pts.T
-
-
-# try:
-#     import pycuda.driver as cuda
-#     import pycuda.autoinit
-#     from pycuda.compiler import SourceModule
-
-#     FUSION_GPU_MODE = 1
-# except Exception as err:
-#     print("Warning: {}".format(err))
-#     print("Failed to import PyCUDA. Running fusion in CPU mode.")
-#     FUSION_GPU_MODE = 0
 
 
 class TSDFVolume:
@@ -335,19 +322,6 @@ class TSDFVolume:
         color_img = torch.from_numpy(color_img).float().to(self._device)  # [H, W, 3]
         cam_pose = torch.from_numpy(cam_pose).float().to(self._device)
         intrinsic = torch.from_numpy(intrinsic).float().to(self._device)
-
-        # TODO:
-        # Better way to select valid voxels.
-        # - Current:
-        #   -> Back project all voxels to frame pixels according to current camera pose.
-        #   -> Select valid pixels within frame size.
-        # - Possible:
-        #   -> Project pixel to voxel coordinates
-        #   -> hash voxel coordinates
-        #   -> dynamically allocate voxel chunks
-
-        # Get the world coordinates of all voxels
-        # world_points = geometry.vox2world(self._vol_origin, self._vox_coords, self._vox_size)
 
         # Get voxel centers under camera coordinates
         world_points = self.ridgid_transform(self._world_coords, cam_pose.inverse())  # [N^3, 3]

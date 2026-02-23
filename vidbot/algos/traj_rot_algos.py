@@ -1,24 +1,23 @@
-import numpy as np
 import copy
 
+import numpy as np
+import pandas as pd
+import open3d as o3d
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as pl
 import torch.nn.functional as F
-import diffuser_utils.dataset_utils as DatasetUtils
-import diffuser_utils.tensor_utils as TensorUtils
-from models.diffuser_rot import DiffuserRotationModel
-from models.helpers import EMA
-import open3d as o3d
-import time
-import cv2
 import torchvision
-from models.clip import clip, tokenize
-import pandas as pd
+
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+import vidbot.diffuser_utils.tensor_utils as TensorUtils
+from vidbot.models.diffuser_rot import DiffuserRotationModel
+from vidbot.models.helpers import EMA
+from vidbot.models.clip import clip, tokenize
 
 
-GRIPPER = o3d.io.read_triangle_mesh("assets/panda_hand_mesh.obj")
+GRIPPER = o3d.io.read_triangle_mesh("/opt/vidbot/assets/panda_hand_mesh.obj")
 VLM, VLM_TRANSFORM = clip.load("ViT-B/16", jit=False)
 VLM.eval()
 for p in VLM.parameters():
@@ -131,12 +130,8 @@ class TrajectoryRotationDiffusionModule(pl.LightningModule):
         action_tokens_null = action_tokens_null.repeat(batch_size, 1)
         action_tokens_null = action_tokens_null.to(data_batch["action_tokens"].device)
 
-        drop_mask_obj = (
-            torch.rand(len(data_batch["object_color"])) < self.cond_drop_obj_p
-        )
-        drop_mask_act = (
-            torch.rand(len(data_batch["action_tokens"])) < self.cond_drop_act_p
-        )
+        drop_mask_obj = torch.rand(len(data_batch["object_color"])) < self.cond_drop_obj_p
+        drop_mask_act = torch.rand(len(data_batch["action_tokens"])) < self.cond_drop_act_p
 
         data_batch["object_color"][drop_mask_obj] = self.cond_fill_val
         data_batch["object_color_aug"][drop_mask_obj] = self.cond_fill_val
@@ -179,9 +174,7 @@ class TrajectoryRotationDiffusionModule(pl.LightningModule):
             apply_guidance=False,  # FIXME: this is a hack to avoid guidance
         )
 
-        data_batch.update(
-            {"pred_trajectories_rot": out["predictions_rot"]}
-        )  # [B, N, H, 3, 3]
+        data_batch.update({"pred_trajectories_rot": out["predictions_rot"]})  # [B, N, H, 3, 3]
         return_dict = {"losses": losses}
 
         if self.train_config.validation.visualize_mode == "render":
@@ -207,13 +200,7 @@ class TrajectoryRotationDiffusionModule(pl.LightningModule):
             )
 
     def visualize_trajectory_by_rendering(
-        self,
-        data_batch,
-        config_path,
-        window=False,
-        return_vis=False,
-        draw_grippers=True,
-        **kwargs
+        self, data_batch, config_path, window=False, return_vis=False, draw_grippers=True, **kwargs
     ):
         batch_size = len(data_batch["color"])
         results = []
@@ -239,9 +226,7 @@ class TrajectoryRotationDiffusionModule(pl.LightningModule):
 
             if "pred_trajectories_rot" in data_batch and draw_grippers:
                 print("===> Visualizing pred trajectories")
-                pred_trajs_rot = (
-                    data_batch["pred_trajectories_rot"][i].cpu().numpy()[:1]
-                )
+                pred_trajs_rot = data_batch["pred_trajectories_rot"][i].cpu().numpy()[:1]
                 for pi, pred_traj_rot in enumerate(pred_trajs_rot):
                     traj_tra = data_batch["gt_trajectory"][i].cpu().numpy()
                     gripper_colors = DatasetUtils.get_heatmap(

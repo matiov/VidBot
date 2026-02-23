@@ -1,25 +1,18 @@
+import cv2
+import matplotlib.pyplot as plt
 import numpy as np
-import copy
-
-from pytorch_lightning.core.optimizer import LightningOptimizer
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as pl
 import torch.nn.functional as F
-from models.rqvae import RQVAE
-from models.goalformer import GoalFormer
-from models.gpt import GPT, GPTConfig
-
-import diffuser_utils.dataset_utils as DatasetUtils
 import torchvision
-import cv2
-from algos.vq_algos import GoalVectorQuantizationModule
-from options import load_options
-from models.clip import clip, tokenize
-import pandas as pd
-import matplotlib.pyplot as plt
-from models.clip import clip, tokenize
+
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+from vidbot.models.goalformer import GoalFormer
+from vidbot.models.clip import clip, tokenize
+
 
 # CLIP-based action text encoder
 VLM, VLM_TRANSFORM = clip.load("ViT-B/16", jit=False)
@@ -34,13 +27,7 @@ class GoalFormerModule(pl.LightningModule):
         self.algo_config = algo_config
         self.train_config = train_config
         self.nets = nn.ModuleDict()
-        # self.use_gpt = False
-        # Initialize the goal former
         policy_kwargs = algo_config.model
-        # if gpt_config is not None:
-        #     print("... Loading the GPT model")
-        #     policy_kwargs["gpt"] = GPT(gpt_config)
-        #     self.use_gpt = True
 
         self.nets["policy"] = GoalFormer(**policy_kwargs)
         self.curr_train_step = 0  # step within an epoch
@@ -78,9 +65,9 @@ class GoalFormerModule(pl.LightningModule):
             verb_text = []
             for bi in range(uid.size(0)):
                 uid_i = uid[bi].item()
-                verb_i = self.action_annotations[
-                    self.action_annotations["uid"] == uid_i
-                ]["verb"].values[0]
+                verb_i = self.action_annotations[self.action_annotations["uid"] == uid_i][
+                    "verb"
+                ].values[0]
                 if verb_i not in [
                     "pick",
                     "pick-up",
@@ -171,9 +158,7 @@ class GoalFormerModule(pl.LightningModule):
 
         # Drop the action
         if self.conditioning_drop_action > 0:
-            data_batch["action_tokens"][drop_mask_action] = action_tokens_null[
-                drop_mask_action
-            ]
+            data_batch["action_tokens"][drop_mask_action] = action_tokens_null[drop_mask_action]
 
         # Drop the bbox
         if self.conditioning_drop_bbox > 0:
@@ -225,21 +210,15 @@ class GoalFormerModule(pl.LightningModule):
         goal_coord_gt_vis = torchvision.utils.make_grid(goal_coord_gt_vis, nrow=4)
         goal_coord_pred_vis = torchvision.utils.make_grid(goal_coord_pred_vis, nrow=4)
 
-        start_pos_depth_gt_vis = torchvision.utils.make_grid(
-            start_pos_depth_gt_vis, nrow=4
-        )
+        start_pos_depth_gt_vis = torchvision.utils.make_grid(start_pos_depth_gt_vis, nrow=4)
         end_pos_depth_gt_vis = torchvision.utils.make_grid(end_pos_depth_gt_vis, nrow=4)
-        end_pos_depth_pred_vis = torchvision.utils.make_grid(
-            end_pos_depth_pred_vis, nrow=4
-        )
+        end_pos_depth_pred_vis = torchvision.utils.make_grid(end_pos_depth_pred_vis, nrow=4)
 
         object_color_vis = torchvision.utils.make_grid(object_color, nrow=4)
         heatmap_pred_vis = torchvision.utils.make_grid(heatmap_pred_vis, nrow=4)
         heatmaps_gt_vis = torchvision.utils.make_grid(heatmaps_gt_vis, nrow=4)
 
-        self.logger.log_image(
-            "val_vis/d_gt", [end_pos_depth_gt_vis], step=self.curr_train_step
-        )
+        self.logger.log_image("val_vis/d_gt", [end_pos_depth_gt_vis], step=self.curr_train_step)
         self.logger.log_image(
             "val_vis/d_pred", [end_pos_depth_pred_vis], step=self.curr_train_step
         )
@@ -248,9 +227,7 @@ class GoalFormerModule(pl.LightningModule):
         )
 
         self.logger.log_image("val_vis/vf_gt", [vf_gt_vis], step=self.curr_train_step)
-        self.logger.log_image(
-            "val_vis/vf_pred", [vf_pred_vis], step=self.curr_train_step
-        )
+        self.logger.log_image("val_vis/vf_pred", [vf_pred_vis], step=self.curr_train_step)
         self.logger.log_image(
             "val_vis/goal_coords_pred", [goal_coord_pred_vis], step=self.curr_train_step
         )
@@ -266,9 +243,7 @@ class GoalFormerModule(pl.LightningModule):
         self.logger.log_image(
             "val_vis/heatmap_pred", [heatmap_pred_vis], step=self.curr_train_step
         )
-        self.logger.log_image(
-            "val_vis/heatmap_gt", [heatmaps_gt_vis], step=self.curr_train_step
-        )
+        self.logger.log_image("val_vis/heatmap_gt", [heatmaps_gt_vis], step=self.curr_train_step)
 
         # Compute the depth error
         depth_error = F.l1_loss(d_pred, d_gt)
@@ -314,9 +289,7 @@ class GoalFormerModule(pl.LightningModule):
         acc = correct_sign / uid.size(0)
         self.log("val/depth_direction_acc", acc)
 
-    def visualize_goal_depth(
-        self, depth, height=256, width=448, depth_min=0.2, depth_max=2.0
-    ):
+    def visualize_goal_depth(self, depth, height=256, width=448, depth_min=0.2, depth_max=2.0):
         depth = depth.view(-1, height, width)
         depth = depth.clamp(min=depth_min, max=depth_max)
         results = []
@@ -374,9 +347,9 @@ class GoalFormerModule(pl.LightningModule):
             color_i = (color_i * 255).astype(np.uint8)
             vis_i = color_i[..., [2, 1, 0]].copy()
             uid_i = uid[bi].item()
-            narration_i = self.action_annotations[
-                self.action_annotations["uid"] == uid_i
-            ]["narration"].values[0]
+            narration_i = self.action_annotations[self.action_annotations["uid"] == uid_i][
+                "narration"
+            ].values[0]
             verb_i = self.action_annotations[self.action_annotations["uid"] == uid_i][
                 "verb"
             ].values[0]

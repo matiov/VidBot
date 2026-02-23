@@ -1,15 +1,13 @@
+import cv2
 import numpy as np
-import copy
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as pl
-import torch.nn.functional as F
-from models.rqvae import RQVAE
-import diffuser_utils.dataset_utils as DatasetUtils
 import torchvision
-import cv2
+
+import vidbot.diffuser_utils.dataset_utils as DatasetUtils
+from vidbot.models.rqvae import RQVAE
 
 
 class GoalVectorQuantizationModule(pl.LightningModule):
@@ -71,12 +69,8 @@ class GoalVectorQuantizationModule(pl.LightningModule):
         vdf_rec_vis = torchvision.utils.make_grid(vdf_rec_vis, nrow=4)
         goal_vis = torchvision.utils.make_grid(goal_vis, nrow=4)
         self.logger.log_image("val_vis/vfd", [vfd_vis], step=self.curr_train_step)
-        self.logger.log_image(
-            "val_vis/vfd_rec", [vdf_rec_vis], step=self.curr_train_step
-        )
-        self.logger.log_image(
-            "val_vis/color_vfd", [goal_vis], step=self.curr_train_step
-        )
+        self.logger.log_image("val_vis/vfd_rec", [vdf_rec_vis], step=self.curr_train_step)
+        self.logger.log_image("val_vis/color_vfd", [goal_vis], step=self.curr_train_step)
 
         # Compute the depth error
         inv_depth = 1 / data_batch["depth"]  # [B, H, W]

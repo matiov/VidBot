@@ -2,12 +2,12 @@ import hashlib
 import os
 import urllib
 import warnings
-from typing import Any, Union, List
+from typing import Union, List
 from pkg_resources import packaging
 
 import torch
 from PIL import Image
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
+from torchvision.transforms import Compose, Normalize
 from tqdm import tqdm
 
 from vidbot.models.clip.model import build_model

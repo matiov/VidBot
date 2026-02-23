@@ -1,98 +1,56 @@
 from collections import OrderedDict
-import math
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from vidbot.diffuser_utils.guidance_loss import DiffuserGuidance
 import vidbot.diffuser_utils.tensor_utils as TensorUtils
-from vidbot.models.helpers import (
-    cosine_beta_schedule,
-    extract,
-    default,
-    fourier_positional_encoding,
-)
+import vidbot.diffuser_utils.dataset_utils as DataUtils
+from vidbot.models.helpers import cosine_beta_schedule, extract, default
+from vidbot.models.feature_extractors import MultiScaleImageFeatureExtractor
 from vidbot.models.temporal import TemporalMapUnet
-from vidbot.models.feature_extractors import (
-    MultiScaleImageFeatureExtractor,
-    TSDFMapFeatureExtractor,
-    TSDFMapGeometryExtractor,
-    PointCloudFeatureExtractor,
-)
 
 
-class DiffuserModel(nn.Module):
+class DiffuserRotationModel(nn.Module):
     def __init__(
         self,
         n_timesteps=100,
         loss_type="l2",
-        observation_weights=1.0,
-        loss_discount=1.0,
         horizon=40,
-        voxel_resolution=64,
-        observation_dim=3,
-        output_dim=3,
+        observation_dim=6,
+        output_dim=6,
         base_dim=32,
         dim_mults=[2, 4, 8],
         vlm_feature_dim=512,
         object_cond_feature_dim=256,
-        spatial_cond_feature_dim=0,
         action_cond_feature_dim=256,
-        map_grid_feature_dim=64,
-        map_extractor_arch="TSDFMapGeometryExtractor",
         diffuser_model_arch="TemporalMapUnet",
-        object_extractor_arch="MultiScaleImageFeatureExtractor",
         diffuser_use_preceiver=False,
-        use_map_feat_grid=True,
-        context_image_shape=[256, 456],
         object_image_shape=[256, 256],
         cond_fill_value=-1.0,
         predict_epsilons=False,
         supervise_epsilons=False,
-        min_bounds=None,
-        max_bounds=None,
-        goal_conditioned=False,
-        force_start=False,
-        force_end=False,
-        use_feature_decoder=True,
         **kwargs,
     ):
-        super(DiffuserModel, self).__init__()
+        super(DiffuserRotationModel, self).__init__()
         self.n_timesteps = int(n_timesteps)
         self.horizon = horizon
         self.observation_dim = observation_dim
-        self.spatial_cond_feature_dim = spatial_cond_feature_dim
         self.object_cond_feature_dim = object_cond_feature_dim
         self.action_cond_feature_dim = action_cond_feature_dim
-        self.cond_feature_dim = (
-            object_cond_feature_dim + spatial_cond_feature_dim + action_cond_feature_dim
-        )
-        self.map_grid_feature_dim = map_grid_feature_dim
+        self.cond_feature_dim = object_cond_feature_dim + action_cond_feature_dim
         self.output_dim = output_dim
         self.base_dim = base_dim
         self.dim_mults = dim_mults
-        self.use_map_feat_grid = use_map_feat_grid
-        self.context_image_shape = context_image_shape
         self.object_image_shape = object_image_shape
         self.cond_fill_value = cond_fill_value
         self.predict_epsilons = predict_epsilons
         self.supervise_epsilons = supervise_epsilons
-        self.goal_conditioned = goal_conditioned
-        self.force_start = force_start
-        self.force_end = force_end
-        print("==========> Force start is: ", self.force_start)
-        print("==========> Force end is: ", self.force_end)
-
-        if self.goal_conditioned and self.spatial_cond_feature_dim > 0:
-            self.cond_feature_dim += 2 * 3 * 8
 
         ## diffuser architecture
         self.register_diffusion_params()
         if diffuser_model_arch == "TemporalMapUnet":
             self.transition_in_dim = self.observation_dim
-            if self.use_map_feat_grid:
-                self.transition_in_dim += map_grid_feature_dim  # 64+3
             # According to Trace, the model directly predicts the start state from the noisy state
             self.model = TemporalMapUnet(
                 horizon=self.horizon,
@@ -107,39 +65,9 @@ class DiffuserModel(nn.Module):
             print("unknown diffuser_model_arch:", diffuser_model_arch)
             raise
 
-        if self.use_map_feat_grid:
-            if map_extractor_arch == "TSDFMapFeatureExtractor":
-                self.map_feature_extractor = TSDFMapFeatureExtractor(
-                    self.context_image_shape,
-                    voxel_resolution=voxel_resolution,
-                    voxel_feature_dim=map_grid_feature_dim,
-                )
-
-            elif map_extractor_arch == "TSDFMapGeometryExtractor":
-                self.map_feature_extractor = TSDFMapGeometryExtractor(
-                    self.context_image_shape,
-                    voxel_resolution=voxel_resolution,
-                    voxel_feature_dim=map_grid_feature_dim,
-                )
-            else:
-                print("unknown map_extractor_arch:", map_extractor_arch)
-                raise
-
-            # print("Map feature extractor size: ")
-            # compute_model_size(self.map_feature_extractor)
-        self.object_extractor_arch = object_extractor_arch
-        print("Object extractor architecture: ", object_extractor_arch)
-        if object_extractor_arch == "MultiScaleImageFeatureExtractor":
-            self.object_feature_extractor = MultiScaleImageFeatureExtractor(
-                embedding_dim=object_cond_feature_dim
-            )
-        elif object_extractor_arch == "PointCloudFeatureExtractor":
-            self.object_feature_extractor = PointCloudFeatureExtractor(
-                embedding_dim=object_cond_feature_dim
-            )
-        else:
-            print("unknown object_extractor_arch:", object_extractor_arch)
-            raise
+        self.object_feature_extractor = MultiScaleImageFeatureExtractor(
+            embedding_dim=object_cond_feature_dim
+        )
 
         self.action_feature_extractor = nn.Sequential(
             nn.TransformerEncoderLayer(
@@ -153,14 +81,6 @@ class DiffuserModel(nn.Module):
 
         self.loss_type = loss_type
         self.current_guidance = None
-
-        # For scaling and descaling the trajectory
-        if min_bounds is not None and max_bounds is not None:
-            self.register_buffer("min_bounds", torch.Tensor(min_bounds))
-            self.register_buffer("max_bounds", torch.Tensor(max_bounds))
-        else:
-            self.min_bounds = None
-            self.max_bounds = None
 
     def register_diffusion_params(self):
         betas = cosine_beta_schedule(self.n_timesteps)
@@ -216,37 +136,12 @@ class DiffuserModel(nn.Module):
         - traj: B x H x 3
         """
 
-        if len(traj.shape) == 3:
-            min_bound_batch = min_bound.unsqueeze(1)  # [B, 1, 3]
-            max_bound_batch = max_bound.unsqueeze(1)  # [B, 1, 3]
-        elif len(traj.shape) == 4:
-            min_bound_batch = min_bound.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, 3]
-            max_bound_batch = max_bound.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, 3]
-        else:
-            raise ValueError("Invalid shape of the input trajectory")
-
-        scale = max_bound_batch - min_bound_batch  # [B, 1, 3]
-        traj = (traj - min_bound_batch) / (scale + 1e-5)
-        traj = traj * 2 - 1
-        traj = traj.clamp(-1, 1)
         return traj
 
     def descale_trajectory(self, traj, min_bound, max_bound):
         """
         - traj: B x N x H x 3
         """
-        if len(traj.shape) == 3:
-            min_bound_batch = min_bound.unsqueeze(1)  # [B, 1, 3]
-            max_bound_batch = max_bound.unsqueeze(1)  # [B, 1, 3]
-        elif len(traj.shape) == 4:
-            min_bound_batch = min_bound.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, 3]
-            max_bound_batch = max_bound.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, 3]
-        else:
-            raise ValueError("Invalid shape of the input trajectory")
-
-        scale = max_bound_batch - min_bound_batch
-        traj = (traj + 1) / 2
-        traj = traj * scale + min_bound_batch
         return traj
 
     def forward(
@@ -277,16 +172,29 @@ class DiffuserModel(nn.Module):
         gt_traj_min_bound = data_batch["gt_traj_min_bound"]
         gt_traj_max_bound = data_batch["gt_traj_max_bound"]
 
-        traj = self.descale_trajectory(traj_scaled, gt_traj_min_bound, gt_traj_max_bound)
-        map_feats = aux_info["color_features_pyramid"][-1]
-        outputs = {"predictions": traj, "map_feature": map_feats}
-        if "guide_losses" in cond_samp_out:
-            outputs["guide_losses"] = cond_samp_out["guide_losses"]
+        traj_r6d_res = self.descale_trajectory(traj_scaled, gt_traj_min_bound, gt_traj_max_bound)
+
+        outputs = {}
+        traj_rot_res = DataUtils.r6d_to_rotation_matrix(traj_r6d_res)  # [B, N, H, 3, 3]
+        traj_rot_res_init = traj_rot_res[:, :, :1]  # [B, N, 3, 3]
+        traj_rot_res_init = traj_rot_res_init.repeat(
+            1, 1, traj_rot_res.shape[2], 1, 1
+        )  # [B, N, H, 3, 3]
+        traj_rot_res = torch.matmul(
+            traj_rot_res, traj_rot_res_init.transpose(-1, -2)
+        )  # [B, N, H, 3, 3]
+
+        rot_init = data_batch["gt_rot_init"][:, None, None]  # [B, 1, 1, 3, 3]
+        rot_init = rot_init.repeat(1, traj_rot_res.shape[1], traj_rot_res.shape[2], 1, 1)
+        traj_rot = torch.matmul(traj_rot_res, rot_init)  # [B, N, H, 3, 3]
+        outputs["predictions_rot"] = traj_rot
+
         return outputs
 
     def compute_losses(self, data_batch):
         aux_info = self.get_aux_info(data_batch, training=True)
-        traj = data_batch["gt_trajectory"]
+        traj = data_batch["gt_r6d_res_trajectory"]
+
         gt_traj_min_bound = data_batch["gt_traj_min_bound"]
         gt_traj_max_bound = data_batch["gt_traj_max_bound"]
 
@@ -303,122 +211,35 @@ class DiffuserModel(nn.Module):
 
     def get_aux_info(self, data_batch, include_class_free_cond=False, training=False):
         if training:
-            color = data_batch["color_aug"]
             object_color = data_batch["object_color_aug"]
-            depth = data_batch["depth_aug"]
         else:
-            color = data_batch["color"]
             object_color = data_batch["object_color"]
-            depth = data_batch["depth"]
 
         intrinsics = data_batch["intrinsics"]
-        voxel_bounds = data_batch["voxel_bounds"]
 
-        # Acauire the map features
-        if "tsdf_grid" in data_batch:
-            tsdf = data_batch["tsdf_grid"]
-        else:
-            tsdf = None
-
-        start_pos = data_batch["start_pos"]  # [B, 3] descaled start position
-        end_pos = data_batch["end_pos"]  # [B, 3] descaled end position
-        gt_traj_min_bound = data_batch["gt_traj_min_bound"]
-        gt_traj_max_bound = data_batch["gt_traj_max_bound"]
-        traj_obs = torch.stack([start_pos, end_pos], dim=1)  # [B, 2, 3]
-        traj_obs = self.scale_trajectory(traj_obs, gt_traj_min_bound, gt_traj_max_bound)
-        start_pos_scaled = traj_obs[:, 0, :3]  # [B, 3]
-        end_pos_scaled = traj_obs[:, -1, :3]  # [B, 3]
-
-        context_scale = math.sqrt(3) * (voxel_bounds[:, 1] - voxel_bounds[:, 0])[:, None]
-
-        spatial_feature = torch.cat([start_pos_scaled, context_scale], dim=-1)
-        if self.goal_conditioned:
-            spatial_feature = torch.cat([end_pos_scaled, spatial_feature], dim=-1)
-
-        spatial_feature = fourier_positional_encoding(
-            spatial_feature, 8
-        )  # [B, 4] => [B, 2*4*8] | [B, 7] => [B, 2*7*8]
-
-        if self.object_extractor_arch == "MultiScaleImageFeatureExtractor":
-            object_feature = self.object_feature_extractor(object_color)
-        elif self.object_extractor_arch == "PointCloudFeatureExtractor":
-            object_points = data_batch["object_points"]
-            object_feature = self.object_feature_extractor(object_points)
-        else:
-            print("unknown object_extractor_arch:", self.object_extractor_arch)
-            raise
-
-        # Acquire the action features (conditional features)
+        object_feature = self.object_feature_extractor(object_color)
         action_feature_vlm = data_batch["action_feature"]
         action_feature = self.action_feature_extractor(action_feature_vlm)
-
-        # Combine all the conditional features
         cond_feature = torch.cat([object_feature, action_feature], dim=-1)
-
-        if self.spatial_cond_feature_dim > 0:
-            # print("Spatial feature is added to the conditional feature")
-            cond_feature = torch.cat([cond_feature, spatial_feature], dim=-1)
 
         gt_traj_min_bound = data_batch["gt_traj_min_bound"]
         gt_traj_max_bound = data_batch["gt_traj_max_bound"]
         aux_info = {
             "cond_feat": cond_feature,
             "intrinsics": intrinsics,
-            "voxel_bounds": voxel_bounds,
-            "start_pos": start_pos,
-            "end_pos": end_pos,
             "gt_traj_min_bound": gt_traj_min_bound,
             "gt_traj_max_bound": gt_traj_max_bound,
         }
 
-        if self.use_map_feat_grid:
-            color_features_pyramid, points_map_pyramid, points_pe_pyramid = (
-                self.map_feature_extractor.compute_context_features(
-                    color, depth, intrinsics, tsdf, action_feature
-                )
-            )
-            aux_info.update(
-                {
-                    "color_features_pyramid": color_features_pyramid,
-                    "points_map_pyramid": points_map_pyramid,
-                    "points_pe_pyramid": points_pe_pyramid,
-                }
-            )
-
         if include_class_free_cond:
-            if self.object_extractor_arch == "MultiScaleImageFeatureExtractor":
-                object_color_non_cond = torch.ones_like(object_color) * self.cond_fill_value
-                object_feature_non_cond = self.object_feature_extractor(object_color_non_cond)
-            else:
-                object_points_non_cond = (
-                    torch.ones_like(data_batch["object_points"]) * self.cond_fill_value
-                )
-                object_feature_non_cond = self.object_feature_extractor(object_points_non_cond)
+            object_color_non_cond = torch.ones_like(object_color) * self.cond_fill_value
+            object_feature_non_cond = self.object_feature_extractor(object_color_non_cond)
             action_feature_non_cond = data_batch["action_feature_null"]
             action_feature_non_cond = self.action_feature_extractor(action_feature_non_cond)
             non_cond_feature = torch.cat(
                 [object_feature_non_cond, action_feature_non_cond],
                 dim=-1,
             )
-            if self.spatial_cond_feature_dim > 0:
-                non_cond_spatial_feature = torch.cat([start_pos_scaled, context_scale], dim=-1)
-                if self.goal_conditioned:
-                    end_pos_non_cond = torch.ones_like(end_pos).fill_(-1e3)[:, None]  # [B, 1, 3]
-                    end_pos_non_cond_scaled = self.scale_trajectory(
-                        end_pos_non_cond, gt_traj_min_bound, gt_traj_max_bound
-                    )[
-                        :, 0, :3
-                    ]  # [B, 3]
-                    non_cond_spatial_feature = torch.cat(
-                        [end_pos_non_cond_scaled, non_cond_spatial_feature], dim=-1
-                    )
-
-                non_cond_spatial_feature = fourier_positional_encoding(
-                    non_cond_spatial_feature, 8
-                )  # [B, 4] => [B, 2*4*8] | [B, 7] => [B, 2*7*8]
-
-                non_cond_feature = torch.cat([non_cond_feature, non_cond_spatial_feature], dim=-1)
-
             aux_info["non_cond_feat"] = non_cond_feature
 
         return aux_info
@@ -479,26 +300,13 @@ class DiffuserModel(nn.Module):
             return guide_grad, per_losses
 
     def p_mean_variance(self, x, t, aux_info={}, class_free_guide_w=0.0):
-        t_inp = t
-        if self.use_map_feat_grid:
-            # time_start = time_perf.time()
-            map_feat_traj = self.query_map_feat_grid(x.detach(), aux_info)
-            # print("Time taken to query map features: ", time_perf.time() - time_start)
-            x_inp = torch.cat([x, map_feat_traj], dim=-1)
-        else:
-            x_inp = x
-        model_prediction = self.model(x_inp, aux_info["cond_feat"], t_inp)
+        model_prediction = self.model(x, aux_info["cond_feat"], t)
 
         if class_free_guide_w != 0.0:
             x_non_cond_inp = x.clone()
-            if self.use_map_feat_grid:
-                map_feat_traj = self.query_map_feat_grid(x_non_cond_inp.detach(), aux_info)
-                x_non_cond_inp = torch.cat([x_non_cond_inp, map_feat_traj], dim=-1)
 
             # model predicts noise from that brings t to t-1
-            model_non_cond_prediction = self.model(
-                x_non_cond_inp, aux_info["non_cond_feat"], t_inp
-            )
+            model_non_cond_prediction = self.model(x_non_cond_inp, aux_info["non_cond_feat"], t)
 
             if not self.predict_epsilons:
                 # ... and combine to get actual model prediction (in noise space as in original paper)
@@ -618,20 +426,6 @@ class DiffuserModel(nn.Module):
         else:
             x_out = model_mean - guide_grad + noise
 
-        if self.force_start:
-            start_pos = data_batch["start_pos"]  # descaled start position
-            end_pos = data_batch["end_pos"]  # descaled end position
-            gt_traj_min_bound = data_batch["gt_traj_min_bound"]
-            gt_traj_max_bound = data_batch["gt_traj_max_bound"]
-
-            traj_obs = torch.stack([start_pos, end_pos], dim=1)  # [B, 2, 3]
-            traj_obs = self.scale_trajectory(traj_obs, gt_traj_min_bound, gt_traj_max_bound)
-
-            x_out[:, 0, :3] = traj_obs[:, 0, :3]
-
-            if self.force_end:
-                x_out[:, -1, :3] = traj_obs[:, -1, :3]
-
         if self.current_guidance is not None and eval_final_guide_loss:
             assert not self.predict_epsilons, "Guidance not implemented for epsilon prediction"
             # eval guidance loss one last time for filtering if desired
@@ -679,18 +473,6 @@ class DiffuserModel(nn.Module):
 
         stride = 1  # NOTE: different from training time if > 1
         steps = [i for i in reversed(range(0, self.n_timesteps, stride))]
-
-        if self.force_start:
-            start_pos = data_batch["start_pos"]  # descaled start position
-            end_pos = data_batch["end_pos"]  # descaled end position
-            gt_traj_min_bound = data_batch["gt_traj_min_bound"]
-            gt_traj_max_bound = data_batch["gt_traj_max_bound"]
-            traj_obs = torch.stack([start_pos, end_pos], dim=1)  # [B, 2, 3]
-            traj_obs = self.scale_trajectory(traj_obs, gt_traj_min_bound, gt_traj_max_bound)
-
-            x[:, 0, :3] = traj_obs[:, 0, :3]
-            if self.force_end:
-                x[:, -1, :3] = traj_obs[:, -1, :3]
 
         for i in steps:
             timesteps = torch.full((batch_size * num_samp,), i, device=device, dtype=torch.long)
@@ -752,16 +534,6 @@ class DiffuserModel(nn.Module):
             **kwargs,
         )
 
-    def query_map_feat_grid(self, x, aux_info):
-        gt_traj_min_bound = aux_info["gt_traj_min_bound"]
-        gt_traj_max_bound = aux_info["gt_traj_max_bound"]
-
-        query_points = self.descale_trajectory(x, gt_traj_min_bound, gt_traj_max_bound)
-        points_features = self.map_feature_extractor(
-            query_points=query_points, **aux_info
-        )  # [B, N, D]
-        return points_features
-
     # ------------------------------------------ training ------------------------------------------#
     def q_sample(self, x_start, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
@@ -776,19 +548,14 @@ class DiffuserModel(nn.Module):
         noise = default(noise, lambda: torch.randn_like(x_start_init))
         # Forward process to get x_t
         x_start = x_start_init
-        start_pos = x_start[:, 0, :3]  # scaled start position
-        end_pos = x_start[:, -1, :3]  # scaled end position
         # noise = noise_init
         x_noisy = self.q_sample(x_start, t, noise)
         t_inp = t
 
         # Reverse process to predict x_start from x_t
         # The input to the noise model includes the map features
-        if self.use_map_feat_grid:
-            map_feat_traj = self.query_map_feat_grid(x_noisy.detach(), aux_info)
-            x_noisy_inp = torch.cat([x_noisy, map_feat_traj], dim=-1)
-        else:
-            x_noisy_inp = x_noisy
+
+        x_noisy_inp = x_noisy
         model_prediction = self.model(x_noisy_inp, aux_info["cond_feat"], t_inp)
         x_recon = self.predict_start_from_noise(
             x_noisy, t_inp, model_prediction, force_noise=self.predict_epsilons
@@ -798,20 +565,12 @@ class DiffuserModel(nn.Module):
             noise_pred = self.predict_noise_from_start(
                 x_noisy, t_inp, x_recon
             )  # noise_pred = x_recon
-            if self.force_start:
-                x_recon[:, 0, :3] = start_pos
-                if self.force_end:
-                    x_recon[:, -1, :3] = end_pos
+
         else:
             x_recon = self.predict_start_from_noise(
                 x_noisy, t_inp, model_prediction, force_noise=True
             )
             noise_pred = model_prediction
-            # loss = self.loss_fn(noise_pred, noise)
-            if self.force_start:
-                noise_pred[:, 0, :3] = start_pos
-                if self.force_end:
-                    noise_pred[:, -1, :3] = end_pos
 
         if self.supervise_epsilons:
             assert self.predict_epsilons
@@ -819,7 +578,6 @@ class DiffuserModel(nn.Module):
         else:
             assert not self.predict_epsilons
             loss = self.loss_fn(x_recon, x_start)
-
         return loss
 
     def loss(self, x, aux_info={}):
@@ -838,12 +596,10 @@ class DiffuserModel(nn.Module):
 
 
 if __name__ == "__main__":
-    diffuser = DiffuserModel(
+    diffuser = DiffuserRotationModel(
+        n_timesteps=50,
         horizon=80,
-        voxel_resolution=32,
-        diffuser_use_preceiver=True,
-        spatial_cond_feature_dim=0,
-        map_extractor_arch="TSDFMapFeatureExtractor",
+        diffuser_use_preceiver=False,
     ).cuda()
 
     state_model = diffuser.model
@@ -854,6 +610,7 @@ if __name__ == "__main__":
     # Test the loss
     data_batch = {
         "gt_trajectory": torch.randn(2, 40, 3).cuda(),
+        "gt_r6d_res_trajectory": torch.randn(2, 40, 6).cuda(),
         "color_aug": torch.randn(2, 3, 256, 456).cuda(),
         "object_color_aug": torch.randn(2, 3, 256, 256).cuda(),
         "depth_aug": torch.randn(2, 1, 256, 456).cuda(),
@@ -865,22 +622,26 @@ if __name__ == "__main__":
         "gt_traj_max_bound": torch.randn(2, 3).cuda(),
         "action_feature": torch.randn(2, 512).cuda(),
         "tsdf_grid": torch.randn(2, 64, 64, 64).cuda(),
+        "gt_rot_init": torch.randn(2, 3, 3).cuda(),
     }
     # for _ in range(20):
     aux_info = diffuser.get_aux_info(data_batch, training=True)
-    diffuser_guidance = DiffuserGuidance()
-    diffuser.set_guidance(diffuser_guidance)
+    # diffuser_guidance = DiffuserGuidance()
+    # diffuser.set_guidance(diffuser_guidance)
     import time
 
     # with torch.no_grad():
-    for _ in range(1):
-        time_start = time.time()
-        out_info = diffuser.conditional_sample(
-            data_batch=data_batch,
-            aux_info=aux_info,
-            apply_guidance=True,
-            return_guidance_losses=True,
-            guide_clean=True,
-            num_samp=1,
-        )
-        print(time.time() - time_start)
+    with torch.no_grad():
+        for _ in range(100):
+            time_start = time.time()
+            out_info = diffuser.conditional_sample(
+                data_batch=data_batch,
+                aux_info=aux_info,
+                apply_guidance=False,
+                return_guidance_losses=False,
+                guide_clean=False,
+                num_samp=1,
+            )
+            print(out_info["pred_trajectory"].shape)
+            print(out_info.keys())
+            print(time.time() - time_start)

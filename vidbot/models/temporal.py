@@ -7,14 +7,9 @@ import torch.nn as nn
 import einops
 from einops.layers.torch import Rearrange
 
-from vidbot.models.layers_2d import (
-    Downsample1d,
-    Upsample1d,
-    Conv1dBlock,
-)
-
+from vidbot.models.layers_2d import Downsample1d, Upsample1d, Conv1dBlock
 from vidbot.models.layers_3d import SinusoidalPosEmb
-from vidbot.models.perceiver import FeaturePerceiver
+from vidbot.models.preceiver import FeaturePreceiver
 
 
 class ResidualTemporalMapBlockConcat(nn.Module):
@@ -71,6 +66,7 @@ class TemporalMapUnet(nn.Module):
 
         dims = [transition_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
+        print(f"[ models/temporal ] Channel dimensions: {in_out}")
 
         time_dim = dim
         self.time_mlp = nn.Sequential(
@@ -85,9 +81,6 @@ class TemporalMapUnet(nn.Module):
         self.downs = nn.ModuleList([])
         self.ups = nn.ModuleList([])
         num_resolutions = len(in_out)
-
-        # Remember the property of the 1D convolution, [B, C_in, L_in] => [B, C_out, L_out]
-        # L_out is dependent on the kernel size and stride, and L_in
 
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
@@ -153,7 +146,8 @@ class TemporalMapUnet(nn.Module):
         self.use_preceiver = use_preceiver
 
         if self.use_preceiver:
-            self.preceiver = FeaturePerceiver(
+            print(f"[ models/temporal ] Using Preceiver")
+            self.preceiver = FeaturePreceiver(
                 transition_dim=transition_dim,
                 condition_dim=cond_dim - time_dim,
                 time_emb_dim=time_dim,
@@ -183,8 +177,6 @@ class TemporalMapUnet(nn.Module):
             x = downsample(
                 x
             )  # Increase the feature dimension, reduce the horizon (consider the spatial resolution in image)
-            # print("Downsample step {}, with shape {}".format(ii, x.shape)) # [B, C, H]
-            # print(f"[ models/temporal ] Downsample step {ii}, with shape {x.shape}")
 
         x = self.mid_block1(x, t)
         x = self.mid_block2(x, t)
@@ -216,11 +208,3 @@ if __name__ == "__main__":
     print("Input shape: ", x.permute(0, 2, 1).shape)  # [B, input_dim, H]
     out = model(x, cond, time)  # [B, dim', H']
     print("Output shape: ", out.permute(0, 2, 1).shape)  # [B, outpu_dim, H]
-
-    # Input shape:  torch.Size([2, 3, 20])
-    # Downsample step 0, with shape torch.Size([2, 64, 10])
-    # Downsample step 1, with shape torch.Size([2, 128, 5])
-    # Downsample step 2, with shape torch.Size([2, 256, 5])
-    # Upsample step 0, with shape torch.Size([2, 128, 10])
-    # Upsample step 1, with shape torch.Size([2, 64, 20])
-    # Output shape:  torch.Size([2, 3, 20])

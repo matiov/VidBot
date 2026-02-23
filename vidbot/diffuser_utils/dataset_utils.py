@@ -1,31 +1,28 @@
+from typing import List
+
+import colorsys
+import cv2
+import flow_vis
+import json
+import matplotlib.pyplot as plt
 import numpy as np
 import open3d as o3d
-import matplotlib.pyplot as plt
-import cv2
-import colorsys
-import json
-from scipy.interpolate import CubicHermiteSpline, PchipInterpolator
-import torch
-from vidbot.models.layers_2d import Project3D, BackprojectDepth
-import flow_vis
-import torch.nn.functional as F
-from vidbot.models.clip import clip
-from typing import List
 from sklearn.cluster import KMeans
-from vidbot.models.helpers import get_view_frustum, TSDFVolume
-from torchvision import transforms as T
+from scipy.interpolate import CubicHermiteSpline, PchipInterpolator
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
+from sklearn.metrics.pairwise import pairwise_distances
+import torch
+import torch.nn.functional as F
+from torchvision import transforms as T
+
+from vidbot.models.clip import clip
+from vidbot.models.helpers import get_view_frustum, TSDFVolume
+from vidbot.models.layers_2d import Project3D, BackprojectDepth
 
 
 def backproject(depth, intrinsics, instance_mask, NOCS_convention=True):
     intrinsics_inv = np.linalg.inv(intrinsics)
-    # image_shape = depth.shape
-    # width = image_shape[1]
-    # height = image_shape[0]
-
-    # x = np.arange(width)
-    # y = np.arange(height)
 
     # non_zero_mask = np.logical_and(depth > 0, depth < 5000)
     non_zero_mask = depth > 0
@@ -34,9 +31,6 @@ def backproject(depth, intrinsics, instance_mask, NOCS_convention=True):
     idxs = np.where(final_instance_mask)
     grid = np.array([idxs[1], idxs[0]])
 
-    # shape: height * width
-    # mesh_grid = np.meshgrid(x, y) #[height, width, 2]
-    # mesh_grid = np.reshape(mesh_grid, [2, -1])
     length = grid.shape[1]
     ones = np.ones([1, length])
     uv_grid = np.concatenate((grid, ones), axis=0)  # [3, num_pixel]
@@ -254,6 +248,34 @@ def visualize_sphere_o3d(center, color=[1, 0, 0], size=0.03):
     return center_o3d
 
 
+def visualize_arrow(start_point, end_point, dist=0.5):
+    arrow_dist = np.linalg.norm(end_point - start_point)
+    if dist is None:
+        dist = arrow_dist
+
+    cone_radius = 0.05
+    cone_height = 0.1
+    arrow = o3d.geometry.TriangleMesh.create_arrow(
+        cylinder_radius=0.025,
+        cone_radius=cone_radius,
+        cylinder_height=dist,
+        cone_height=cone_height,
+    )
+    arrow.translate(start_point)
+    z_axis = end_point - start_point
+    z_axis = z_axis / np.linalg.norm(z_axis)
+    x_axis = np.array([1, 0, 0])
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / np.linalg.norm(y_axis)
+    x_axis = np.cross(y_axis, z_axis)
+    x_axis = x_axis / np.linalg.norm(x_axis)
+    R = np.stack([x_axis, y_axis, z_axis], axis=1)
+    arrow.rotate(R, center=start_point)
+    arrow.compute_vertex_normals()
+    arrow.paint_uniform_color([0, 0, 1])
+    return arrow
+
+
 def visualize_3d_trajectory(trajectory, size=0.03, cmap_name="plasma", invert=False):
     vis_o3d = []
     traj_color = get_heatmap(np.arange(len(trajectory)), cmap_name=cmap_name, invert=invert)
@@ -270,6 +292,102 @@ def visualize_points(points, colors=None):
     return pcd
 
 
+def visualize_points_minimum_3dcube(points, center=None):
+    pcd_obj = visualize_points(points)
+    bbox3d_o3d = pcd_obj.get_oriented_bounding_box()
+
+    dist = pairwise_distances(points, points)
+    scale = np.linalg.norm(dist, axis=1)
+    scale = np.percentile(dist, 80) / np.sqrt(3)
+    scale = scale * 1.2
+
+    bbox_3d = get_3d_bbox([scale, scale, scale])
+    T = np.eye(4)
+    T[:3, :3] = bbox3d_o3d.R
+    T[:3, 3] = center if center is not None else bbox3d_o3d.get_center()
+    bbox_3d = transform_points(bbox_3d, T)
+    bbox3d_o3d = line_set(bbox_3d)
+    return bbox3d_o3d
+
+
+def generate_contact_heatmap(image, uvs, k_ratio=3):
+    heatmap = np.zeros((image.shape[0], image.shape[1])).astype(np.float32)
+    for i in range(uvs.shape[0]):
+        u = uvs[i, 0]
+        v = uvs[i, 1]
+        col = int(u)
+        row = int(v)
+        try:
+            heatmap[row, col] += 1.0
+        except Exception:
+            col = min(max(col, 0), image.shape[1] - 1)
+            row = min(max(row, 0), image.shape[0] - 1)
+            heatmap[row, col] += 1.0
+    if k_ratio is not None:
+        k_size = int(np.sqrt(image.shape[1] * image.shape[0]) / k_ratio)
+        if k_size % 2 == 0:
+            k_size += 1
+        heatmap = cv2.GaussianBlur(heatmap, (k_size, k_size), 0)
+    if heatmap.max() > 0:
+        heatmap /= heatmap.max()
+    return heatmap
+
+
+def generate_pixel_heatmap(image, uvs, k_ratio=3):
+    # Initialize the heatmap
+    heatmap = np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
+
+    # Clip uvs to be within the bounds of the heatmap
+    uvs[:, 0] = np.clip(uvs[:, 0], 0, image.shape[1] - 1)
+    uvs[:, 1] = np.clip(uvs[:, 1], 0, image.shape[0] - 1)
+
+    # Convert the uv coordinates to integer pixel coordinates
+    cols = uvs[:, 0].astype(int)
+    rows = uvs[:, 1].astype(int)
+
+    # Use np.add.at for accumulation at specific indices
+    np.add.at(heatmap, (rows, cols), 1.0)
+
+    # Apply Gaussian blur if k_ratio is provided
+    if k_ratio is not None:
+        k_size = int(np.sqrt(image.shape[1] * image.shape[0]) / k_ratio)
+        if k_size % 2 == 0:
+            k_size += 1
+        heatmap = cv2.GaussianBlur(heatmap, (k_size, k_size), 0)
+
+    # Normalize the heatmap if max is greater than 0
+    if heatmap.max() > 0:
+        heatmap /= heatmap.max()
+
+    return heatmap
+
+
+def visualize_2d_contact_map(image, uvs, k_ratio=3):
+    heatmap = np.zeros((image.shape[0], image.shape[1])).astype(np.float32)
+    for i in range(uvs.shape[0]):
+        u = uvs[i, 0]
+        v = uvs[i, 1]
+        col = int(u)
+        row = int(v)
+        try:
+            heatmap[row, col] += 1.0
+        except Exception:
+            col = min(max(col, 0), image.shape[1] - 1)
+            row = min(max(row, 0), image.shape[0] - 1)
+            heatmap[row, col] += 1.0
+    if k_ratio is not None:
+        k_size = int(np.sqrt(image.shape[1] * image.shape[0]) / k_ratio)
+        if k_size % 2 == 0:
+            k_size += 1
+        heatmap = cv2.GaussianBlur(heatmap, (k_size, k_size), 0)
+    if heatmap.max() > 0:
+        heatmap /= heatmap.max()
+    heatmap = get_heatmap(heatmap, cmap_name="turbo", invert=False)
+    heatmap = (heatmap * 255).astype(np.uint8)[..., [2, 1, 0]]
+    heatmap = cv2.addWeighted(image, 0.6, heatmap, 0.4, 0)
+    return heatmap
+
+
 def random_colors(N, bright=True):
     """
     Generate random colors.
@@ -281,6 +399,32 @@ def random_colors(N, bright=True):
     colors = list(map(lambda c: colorsys.hsv_to_rgb(*c), hsv))
     # random.shuffle(colors)
     return colors
+
+
+def line_set(points_array):
+    open_3d_lines = [
+        [0, 1],
+        [7, 3],
+        [1, 3],
+        [2, 0],
+        [3, 2],
+        [0, 4],
+        [1, 5],
+        [2, 6],
+        # [4, 7],
+        [7, 6],
+        [6, 4],
+        [4, 5],
+        [5, 7],
+    ]
+    # colors = [[1, 0, 0] for i in range(len(lines))]
+    colors = random_colors(len(open_3d_lines))
+    line_set = o3d.geometry.LineSet(
+        points=o3d.utility.Vector3dVector(points_array),
+        lines=o3d.utility.Vector2iVector(open_3d_lines),
+    )
+    line_set.colors = o3d.utility.Vector3dVector(colors)
+    return line_set
 
 
 def get_3d_bbox(size, shift=0):
@@ -310,6 +454,60 @@ def get_3d_bbox(size, shift=0):
     return bbox_3d
 
 
+def update_viewpoint(vis, extrinsic=None, verbose=False):
+    vis_ctr = vis.get_view_control()
+    cam = vis_ctr.convert_to_pinhole_camera_parameters()
+    if verbose:
+        print(cam.extrinsic)
+    cam.extrinsic = extrinsic
+    vis_ctr.convert_from_pinhole_camera_parameters(cam, allow_arbitrary=True)
+
+
+def load_viewpoint(vis, config_path):
+    vis.create_window()
+    ctr = vis.get_view_control()
+    param = o3d.io.read_pinhole_camera_parameters(config_path)
+
+    ctr.convert_from_pinhole_camera_parameters(param, allow_arbitrary=True)
+
+
+def render_offscreen(geos, config_path, dist=None, resize_factor=0.5):
+    cam = o3d.io.read_pinhole_camera_parameters(config_path)
+    height = cam.intrinsic.height
+    width = cam.intrinsic.width
+    render = o3d.visualization.rendering.OffscreenRenderer(width=width, height=height)
+    render.scene.scene.set_sun_light(
+        [0, -1, 0], [1, 1, 1], 12000  # direction  # color
+    )  # intensity
+    render.scene.scene.enable_sun_light(True)
+
+    mat1 = o3d.visualization.rendering.MaterialRecord()
+    mat1.shader = "defaultLitTransparency"
+    mat1.base_color = [0.9, 0.9, 0.9, 1]
+    mat1.point_size = 5.0
+
+    if dist is not None:
+        theta = 0.0
+        T = np.array(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, np.cos(theta), -np.sin(theta), 0.0],
+                [0.0, np.sin(theta), np.cos(theta), 0.6],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        )
+
+        cam.extrinsic = T
+
+    for i, geo in enumerate(geos):
+        render.scene.scene.add_geometry("obj{}".format(i), geo, mat1)
+
+    render.setup_camera(cam.intrinsic, cam.extrinsic)
+    render_img = np.asarray(render.render_to_image())
+    render_img = cv2.resize(render_img, (0, 0), fx=resize_factor, fy=resize_factor)
+    return render_img
+
+
 def spline_interpolation(fill_indices, traj):
     fill_times = np.array(fill_indices, dtype=np.float32)
     fill_traj = np.array([traj[ii] for ii, idx in enumerate(fill_indices)], dtype=np.float32)
@@ -327,6 +525,15 @@ def spline_interpolation(fill_indices, traj):
     return full_traj, curve
 
 
+def smooth_hand_3d_trajectory(trajectory, action, object_name, z_thres=0.03):
+    traj_vel_z = [(trajectory[i, 2] - trajectory[0, 2]) / i for i in range(1, len(trajectory))]
+    traj_vel_z = np.median(np.array(traj_vel_z))
+    if action in ["open", "close"]:
+        traj_vel_z = np.clip(traj_vel_z, -z_thres, z_thres)
+    trajectory[:, 2] = trajectory[0, 2] + traj_vel_z * np.arange(len(trajectory))
+    return trajectory
+
+
 def interpolate_trajectory(fill_indices, traj):
     # import pdb; pdb.set_trace()
     full_traj_x, curve_x = spline_interpolation(fill_indices, traj[:, 0])
@@ -335,6 +542,52 @@ def interpolate_trajectory(fill_indices, traj):
     full_traj = np.stack([full_traj_x, full_traj_y, full_traj_z], axis=1)
     curve = (curve_x, curve_y, curve_z)
     return full_traj, curve
+
+
+def visualize_2d_trajectory(
+    image,
+    trajectory,
+    intr,
+    traj_vis_color=None,
+    cmap_name="plasma",
+    min_radii=3,
+    max_radii=9,
+):
+    vis = np.ascontiguousarray(image).copy()
+    trajectory = torch.from_numpy(trajectory).unsqueeze(0)  # [1, N, 3]
+    traj_dist = torch.norm(trajectory[0], dim=-1).squeeze()  # [N]
+    traj_depth = trajectory[0, :, 2]  # [N]
+    pose = torch.eye(4).unsqueeze(0).repeat(trajectory.shape[0], 1, 1)
+    proj_uv = Project3D()(trajectory, intr, pose)
+    proj_uv = proj_uv.numpy().T
+    traj_color = get_heatmap(np.arange(len(proj_uv)), cmap_name, invert=False)
+    for i, wp in enumerate(proj_uv):
+        if traj_vis_color is not None:
+            wp_color = traj_vis_color
+        else:
+            wp_color = (traj_color[i] * 255).astype(np.uint8)
+        wp = np.floor(wp).astype(np.int32)
+        depth_norm = (traj_depth[i] - traj_depth.min()) / (
+            traj_depth.max() - traj_depth.min() + 1e-5
+        )
+        dist_norm = (traj_dist[i] - traj_dist.min()) / (traj_dist.max() - traj_dist.min() + 1e-5)
+
+        dist_norm = 1 - dist_norm
+        depth_norm = 1 - depth_norm
+        time_norm = i / len(proj_uv)
+        if len(proj_uv) > 1:
+            radii = min_radii + (max_radii - min_radii) * depth_norm
+        else:
+            radii = 5
+        # radii = min_radii + (max_radii - min_radii) * time_norm
+        vis = cv2.circle(
+            vis,
+            center=(int(wp[0]), int(wp[1])),
+            radius=int(radii),
+            color=(int(wp_color[2]), int(wp_color[1]), int(wp_color[0])),
+            thickness=-1,
+        )
+    return vis
 
 
 def compute_vector_field_from_coordinate(goal, height, width, return_grid=True, eps=1e-6):
@@ -387,12 +640,6 @@ def transform_point_to_VFD(point, depth, intr, downsample=1, depth_min=1e-3, dep
     intr = torch.from_numpy(intr).float()[None]  # [1, 3, 3]
 
     uv = Project3D()(point, intr)[0, :, 0].numpy()  # [1, 2, 1] => [2]
-    # inv_d = 1 / point[..., 2].squeeze().numpy()
-    # inv_depth = 1 / depth
-    # inv_depth_min = 1 / depth_max
-    # inv_depth_max = 1 / depth_min
-    # inv_d = np.clip(inv_d, inv_depth_min, inv_depth_max)
-    # inv_d_ratio = (inv_d - inv_depth_min) / (inv_depth_max - inv_depth_min)
 
     d = point[..., 2].squeeze().numpy()
     d = np.clip(d, depth_min, depth_max)
@@ -491,6 +738,7 @@ def ransac_voting_layer(
 
     if len(pixels) > num_samples:
         if masks is None:
+            # TODO: introduce mask-based subsampling
             selected_idx = np.random.choice(np.arange(len(pixels)), num_samples, replace=False)
         else:
             valid_pixels = torch.nonzero(masks).squeeze(1)  # [N, ]
@@ -682,6 +930,54 @@ def visualize_vector_field(vector_field):
     return flow_color
 
 
+def apply_pca_colormap_return_proj(
+    image,
+    proj_V=None,
+    low_rank_min=None,
+    low_rank_max=None,
+    niter=5,
+):
+    """Convert a multichannel image to color using PCA.
+
+    Args:
+        image: Multichannel image.
+        proj_V: Projection matrix to use. If None, use torch low rank PCA.
+
+    Returns:
+        Colored PCA image of the multichannel input image.
+    """
+    image_flat = image.reshape(-1, image.shape[-1])
+
+    # Modified from https://github.com/pfnet-research/distilled-feature-fields/blob/master/train.py
+    if proj_V is None:
+        mean = image_flat.mean(0)
+        with torch.no_grad():
+            U, S, V = torch.pca_lowrank(image_flat - mean, niter=niter)
+        proj_V = V[:, :3]
+
+    low_rank = image_flat @ proj_V
+    if low_rank_min is None:
+        low_rank_min = torch.quantile(low_rank, 0.01, dim=0)
+    if low_rank_max is None:
+        low_rank_max = torch.quantile(low_rank, 0.99, dim=0)
+
+    low_rank = (low_rank - low_rank_min) / (low_rank_max - low_rank_min)
+    low_rank = torch.clamp(low_rank, 0, 1)
+
+    colored_image = low_rank.reshape(image.shape[:-1] + (3,))
+    return colored_image, proj_V, low_rank_min, low_rank_max
+
+
+def apply_pca_colormap(
+    image,
+    proj_V=None,
+    low_rank_min=None,
+    low_rank_max=None,
+    niter: int = 5,
+):
+    return apply_pca_colormap_return_proj(image, proj_V, low_rank_min, low_rank_max, niter)[0]
+
+
 def compute_trajectory_bounds(trajectory, enlarge_ratio=4, different_z_size=False):
     start_point = trajectory[0]
     end_point = trajectory[-1]
@@ -795,6 +1091,25 @@ def encode_text_clip(
     return texts.detach(), encoded_text.detach()
 
 
+def compute_model_size(model):
+    param_size = 0
+    for param in model.parameters():
+        param_size += param.nelement() * param.element_size()
+    buffer_size = 0
+    for buffer in model.buffers():
+        buffer_size += buffer.nelement() * buffer.element_size()
+
+    size_all_mb = (param_size + buffer_size) / 1024**2
+    print("model size: {:.3f}MB".format(size_all_mb))
+
+
+def compute_box_from_mask(mask):
+    idxs = np.where(mask)
+    x1, x2 = np.amin(idxs[1]), np.amax(idxs[1])
+    y1, y2 = np.amin(idxs[0]), np.amax(idxs[0])
+    return int(x1), int(y1), int(x2), int(y2)
+
+
 def descale_trajectory_length(traj, scale):
     """
     - traj: B x N x H x 3
@@ -815,12 +1130,6 @@ def scale_trajectory_length(traj, scale):
 def get_normal_from_depth_in_batch(depth, intrinsics, return_points=False):
     batch_size, h, w = depth.shape
     device = depth.device
-    # depth_np = depth.cpu().numpy()
-    # depth_smooth = []
-    # for depth_i in depth_np:
-    #     depth_i = cv2.GaussianBlur(depth_i, (11, 11), 0)
-    #     depth_smooth.append(depth_i)
-    # depth = torch.tensor(depth_smooth).to(device)
 
     cam_points = BackprojectDepth(h, w)(depth, intrinsics)  # [B, 3, H, W]
     cam_points = cam_points.view(1, 3, h, w)
@@ -845,15 +1154,6 @@ def get_normal_from_depth_in_batch(depth, intrinsics, return_points=False):
     )
     normal = torch.nn.functional.normalize(normal, dim=1)
     normal[:, -1] *= -1  # [B, 3, H, W]
-
-    # normal_np = normal.cpu().numpy()
-    # normal_smooth = []
-    # for normal_i in normal_np:
-    #     normal_i = normal_i.transpose(1, 2, 0)
-    #     normal_i = cv2.GaussianBlur(normal_i, (11, 11), 0)
-    #     normal_i = normal_i.transpose(2, 0, 1)
-    #     normal_smooth.append(normal_i)
-    # normal = torch.tensor(normal_smooth).to(device)
 
     if return_points:
         return normal, cam_points
@@ -902,6 +1202,22 @@ def trimesh_to_o3d(mesh, scale=1.0, with_color=True):
         mesh_o3d.vertex_colors = o3d.utility.Vector3dVector(mesh.visual.vertex_colors[:, :3] / 255)
     mesh_o3d.compute_vertex_normals()
     return mesh_o3d
+
+
+def rotation_matrix_to_r6d(rotation):
+    """Convert a 3x3 rotation matrix to a 6D rotation vector.
+
+    Args:
+        rotation: 3x3 rotation matrix.
+
+    Returns:
+        6D rotation vector.
+    """
+    raise NotImplementedError("No support")
+
+
+def r6d_to_rotation_matrix(r6d):
+    raise NotImplementedError("No support")
 
 
 # Encoding: Convert text to a NumPy array of ASCII values
@@ -958,6 +1274,7 @@ def get_context_data_from_rgbd(
     inv_intr = np.linalg.inv(intr)
     color = center_crop_image(color, context_image_shape[0], context_image_shape[1])
     depth = center_crop_image(depth, context_image_shape[0], context_image_shape[1])
+    depth[depth > 2] = 0.0
     vol_bnds = np.zeros((3, 2))
     view_frust_pts = get_view_frustum(depth_orig, intr_orig, np.eye(4))
     vol_bnds[:, 0] = np.minimum(vol_bnds[:, 0], np.amin(view_frust_pts, axis=1)).min()
