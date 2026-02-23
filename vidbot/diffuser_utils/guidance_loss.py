@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 
+from vidbot.models.layers_2d import Project3D
+
 
 class Guidance:
     def __init__(self, scale=1.0, valid_horizon=-1):
