@@ -39,7 +39,7 @@ class GoalFormerModule(pl.LightningModule):
         self.drop_color_fill = algo_config.training.drop_color_fill
 
         # Load the action label path
-        self.action_annotations = pd.read_csv(algo_config.training.action_label_path)
+        self.action_annotations = pd.read_csv("/opt/vidbot/assets/EPIC_train_action_labels.csv")
 
     @torch.no_grad()
     def encode_action(self, data_batch, clip_model=VLM, max_length=20):

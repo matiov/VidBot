@@ -51,7 +51,7 @@ class TrajectoryRotationDiffusionModule(pl.LightningModule):
             self.ema_start_step = algo_config.ema.ema_start_step
             self.reset_parameters()
 
-        self.action_annotations = pd.read_csv(algo_config.training.action_label_path)
+        self.action_annotations = pd.read_csv("/opt/vidbot/assets/EPIC_train_action_labels.csv")
         self.curr_train_step = 0  # step within an epoch
 
     @property
