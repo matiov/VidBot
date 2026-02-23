@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+
+# These are not called directly but are needed for the dynamic eval
 from torchvision.ops import roi_align, roi_pool
 
 from vidbot.models.gpt import GPT, GPTConfig

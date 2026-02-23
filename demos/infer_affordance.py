@@ -199,7 +199,6 @@ def main(args):
             )
 
         inference_engine.compute_object_contact_normal(data_batch)
-        inference_engine.compute_object_grasp_pose(data_batch, collision_thresh=0.25)
 
         if not args.skip_fine_stage:
             inference_engine.forward_traj(
