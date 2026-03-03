@@ -36,8 +36,11 @@ class AffordanceInferenceEngine(pl.LightningModule):
         traj_guidance=None,
         use_detector=False,
         use_esam=False,
+        device=None,
     ):
         super(AffordanceInferenceEngine, self).__init__()
+
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         # Initialize the modules
         self.nets = {}
@@ -112,7 +115,7 @@ class AffordanceInferenceEngine(pl.LightningModule):
         if len(self.nets.keys()) > 0:
             for k, v in self.nets.items():
                 v.eval()
-                v.cuda()
+                v.to(self.device)
 
     @torch.no_grad()
     def encode_action(self, data_batch, clip_model, max_length=20):
